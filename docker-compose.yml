@@ -1,0 +1,17 @@
+# FalkorDB is the source of truth for circe-graph: candidates, learned
+# aliases, write-back memory. The app never keeps a parallel in-memory catalog.
+services:
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: circe-graph-falkordb
+    ports:
+      - "6379:6379"
+    volumes:
+      - falkordb-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+volumes:
+  falkordb-data:
