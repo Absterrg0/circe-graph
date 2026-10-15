@@ -2,6 +2,8 @@
 
 **A voice-driven multi-machine coding agent whose routing, memory, and reasoning all live in one FalkorDB graph** — built for the Graph Hacks hackathon (Track 2: Agent Memory and Coordination; Track 1: Agents That Act on Connected Data).
 
+▶ **[90-second demo video](docs/demo.mp4)** — the memory loop end to end: a mishearing earns a question, "yes" teaches the graph, and a brand-new session gets `answered_from_memory`. Real output, unedited.
+
 Circe turns a spoken request ("start a task in Rivvl to fix the login bug") into a route to one project on one machine. The reference implementation resolves the project against an **in-memory candidates array** and forgets everything on restart. circe-graph replaces that array with **Cypher queries against FalkorDB** and makes the graph the source of truth for four things at once:
 
 1. **Routing** — candidates come from Cypher, never from a sidecar cache.
