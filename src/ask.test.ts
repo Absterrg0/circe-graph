@@ -5,8 +5,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { askGraph, ASK_TOOLS, ROUTE_TOOL } from "./ask.ts";
-import { closeGraph, getGraph } from "./falkor.ts";
-import { seedGraph } from "./seedGraph.ts";
+import { closeGraph, getGraph, runCypher } from "./falkor.ts";
+import { SEED_IDS, seedGraph } from "./seedGraph.ts";
 
 beforeAll(async () => {
   process.env.CIRCE_GRAPH = "circe_test_ask";
@@ -21,6 +21,7 @@ describe("askGraph", () => {
   it("whats_running traverses machine → project → task and returns every path", async () => {
     const all = await askGraph("whats_running");
     expect(all.outcome).toBe("answered_with_path");
+    expect(all.untrusted).toBe(true);
     expect(all.rows).toHaveLength(3);
     expect(all.paths).toHaveLength(3);
     expect(all.paths.join("\n")).toContain(
@@ -78,6 +79,28 @@ describe("askGraph", () => {
     const unknown = await askGraph("why_heard", { text: "blender" });
     expect(unknown.outcome).toBe("unknown_name");
     expect(unknown.paths).toEqual([]);
+  });
+
+  it("refuses to narrate one meaning when several projects own the same alias text", async () => {
+    await runCypher(
+      `MATCH (p:Project {id: $id})
+       CREATE (a:Alias {text: 'rival', kind: 'hint', projectId: $id})
+       CREATE (p)-[:LEARNED_ALIAS {source: 'test'}]->(a)`,
+      { id: SEED_IDS.portfolioLaptop },
+    );
+    try {
+      const heard = await askGraph("why_heard", { text: "rival" });
+      expect(heard.outcome).toBe("ambiguous_name");
+      expect(heard.summary).toContain("will not guess");
+      expect(heard.paths).toHaveLength(2);
+    } finally {
+      // Clean up: ownership goes back to one project for any later test.
+      await runCypher(
+        `MATCH (:Project {id: $id})-[l:LEARNED_ALIAS]->(a:Alias {text: 'rival'})
+         DELETE l, a`,
+        { id: SEED_IDS.portfolioLaptop },
+      );
+    }
   });
 
   it("validates arguments and refuses unknown tools", async () => {

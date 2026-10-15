@@ -1,12 +1,11 @@
 /**
  * Route tests run against a live FalkorDB (docker compose up -d) on a
- * separate graph so they never touch the demo data. Tests that teach the graph
- * (the learning test) run last; everything before them asserts the seeded
- * state.
+ * separate graph so they never touch the demo data. Nothing here teaches the
+ * graph permanently — the learning flow lives in route.learning.test.ts —
+ * so this file stays order-independent and safe under --sequence.shuffle.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { getCandidates } from "./catalog.ts";
 import { closeGraph, getGraph, runCypher, type CypherParams } from "./falkor.ts";
 import { answerClarification, confirmRoute, routeWithGraph } from "./route.ts";
 import { SEED_IDS, seedGraph } from "./seedGraph.ts";
@@ -44,11 +43,17 @@ describe("routeWithGraph", () => {
     ]);
     expect(route.disconnectedMachine).toBeUndefined();
 
-    // Memory the graph held before this turn ran: both seeded Rivvl episodes.
-    expect(route.memory.map(({ text }) => text)).toEqual([
-      "started fixing the login redirect in Rivvl",
-      "checked whether the login flow works in Rivvl",
-    ]);
+    // Memory the graph held before this turn ran: both seeded Rivvl episodes,
+    // marked as the replayed user speech they are. Other tests may have
+    // written newer episodes about Rivvl, so this checks presence and relative
+    // order — the seed order must survive the newest-first global sort.
+    const texts = route.memory.map(({ text }) => text);
+    expect(texts).toContain("started fixing the login redirect in Rivvl");
+    expect(texts).toContain("checked whether the login flow works in Rivvl");
+    expect(texts.indexOf("started fixing the login redirect in Rivvl")).toBeLessThan(
+      texts.indexOf("checked whether the login flow works in Rivvl"),
+    );
+    expect(route.memory[0]).toMatchObject({ provenance: "user-speech", untrusted: true });
 
     expect(
       await count(
@@ -107,8 +112,9 @@ describe("routeWithGraph", () => {
     ]);
     expect(route.cypherPath.paths).toHaveLength(2);
     expect(route.cypherPath.paths.join("\n")).toContain("machine disconnected");
-    // First time this phrase is answered has not happened yet.
-    expect(route.lastMeant).toBeUndefined();
+    // Whether this phrase was answered before depends on test order (the
+    // precedent itself, and the still-asks-next-time behaviour, are asserted
+    // in "answers a clarification, remembers what the phrase meant" below).
     expect(
       await count(
         "MATCH (u:Utterance {status: 'needs-clarification'}) RETURN count(u) AS total",
@@ -152,6 +158,25 @@ describe("routeWithGraph", () => {
       expect(route.result.heard).toBe("Javis");
       expect(route.result.prompt).toContain("couldn't match");
     }
+  });
+
+  it("labels natural unmatched phrasings as not_in_graph, with the heard span", async () => {
+    const simple = await routeWithGraph("open Javis");
+    expect(simple.outcome).toBe("not_in_graph");
+    expect(simple.result.status).toBe("not-mentioned");
+    expect(simple.unmatchedName).toBe("Javis");
+
+    const phrased = await routeWithGraph("start a task in Javis to fix the login bug");
+    expect(phrased.outcome).toBe("not_in_graph");
+    expect(phrased.result.status).toBe("needs-clarification");
+    expect(phrased.unmatchedName).toBe("Javis");
+  });
+
+  it("flags a confirmed candidate that was never offered, and teaches nothing", async () => {
+    const route = await confirmRoute("In Portfolio.", SEED_IDS.rivvl);
+    expect(route.outcome).toBe("needs_clarification");
+    expect(route.confirmedTargetNotOffered).toBe(true);
+    expect(route.learned).toBeUndefined();
   });
 
   it("answers a clarification, remembers what the phrase meant, and still asks next time", async () => {
@@ -203,6 +228,19 @@ describe("routeWithGraph", () => {
     expect(notPending.reason).toBe("not-a-clarification");
   });
 
+  it("reports a disconnected machine when a clarification resolves to it", async () => {
+    const answered = await answerClarification("Open Portfolio.", "build-box");
+    expect(answered.resolved).toBe(true);
+    expect(answered.project).toMatchObject({
+      id: SEED_IDS.portfolioBuildBox,
+      machine: { name: "build-box", connected: false },
+    });
+    expect(answered.disconnectedMachine).toMatchObject({
+      id: SEED_IDS.machineBuildBox,
+      name: "build-box",
+    });
+  });
+
   it("writes nothing for a turn that named no project", async () => {
     const utterancesBefore = await count("MATCH (u:Utterance) RETURN count(u) AS total");
     const episodesBefore = await count("MATCH (e:Episode) RETURN count(e) AS total");
@@ -215,49 +253,19 @@ describe("routeWithGraph", () => {
     expect(await count("MATCH (e:Episode) RETURN count(e) AS total")).toBe(episodesBefore);
   });
 
-  // Teaches the graph permanently, so it runs last.
-  it("learns a confirmed pronunciation and answers it from memory next session", async () => {
-    const utterance = "I need you to check out Zivil.";
-    const confirmed = await confirmRoute(utterance, SEED_IDS.rivvl);
-    expect(confirmed.outcome).toBe("answered_with_path");
-    expect(confirmed.result).toMatchObject({
-      status: "resolved",
-      match: "confirmed-pronunciation",
-      project: { id: SEED_IDS.rivvl },
-    });
-    expect(confirmed.learned).toMatchObject({ text: "zivil", projectId: SEED_IDS.rivvl });
-
-    // The graph kept the confirmation with provenance: project → alias, and
-    // the utterance that taught it → alias.
-    expect(
-      await count(
-        "MATCH (p:Project {id: $id})-[:LEARNED_ALIAS {source: 'confirmation'}]->(a:Alias {text: 'zivil', kind: 'confirmed'}) RETURN count(p) AS total",
-        { id: SEED_IDS.rivvl },
-      ),
-    ).toBe(1);
-    expect(
-      await count(
-        "MATCH (u:Utterance {text: $text})-[:TAUGHT]->(a:Alias {text: 'zivil'}) RETURN count(u) AS total",
-        { text: utterance },
-      ),
-    ).toBeGreaterThanOrEqual(1);
-
-    // A confirmed alias is part of how the project is named now.
-    const candidates = await getCandidates(utterance);
-    expect(candidates.find(({ id }) => id === SEED_IDS.rivvl)?.names).toEqual(["Rivvl", "zivil"]);
-
-    // Session two: the same words, answered from memory.
-    const next = await routeWithGraph(utterance);
-    expect(next.outcome).toBe("answered_from_memory");
-    expect(next.result).toMatchObject({
-      status: "resolved",
-      match: "confirmed-pronunciation",
-      project: { id: SEED_IDS.rivvl },
-    });
-    expect(next.learned).toBeUndefined();
-    expect(next.cypherPath.paths[0]).toContain(
-      '-[:LEARNED_ALIAS {source: "confirmation"}]->(:Alias {text: "zivil", kind: "confirmed"})',
+  it("orders recalled memory globally newest-first across projects", async () => {
+    await runCypher(
+      `MATCH (p:Project {id: $id})
+       CREATE (e:Episode:Memory {id: 'episode-test-newest', text: 'build-box scratch note', ts: '2026-10-12T08:00:00.000Z', status: 'resolved'})
+       CREATE (e)-[:ABOUT]->(p)`,
+      { id: SEED_IDS.portfolioBuildBox },
     );
-    expect(next.cypherPath.paths[0]).toContain("answered from memory");
+    const route = await routeWithGraph("Open Portfolio.");
+    expect(route.memory.map(({ text }) => text)).toContain("build-box scratch note");
+    const times = route.memory.map(({ ts }) => ts);
+    expect([...times].sort((left, right) => (left === right ? 0 : left < right ? 1 : -1))).toEqual(
+      times,
+    );
   });
+
 });

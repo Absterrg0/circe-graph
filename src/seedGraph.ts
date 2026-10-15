@@ -8,7 +8,7 @@
  * Schema (v2 — designed around the questions the agent asks):
  *   (:User)-[:SAID]->(:Utterance)-[:RESOLVED_TO {match}]->(:Project)
  *   (:Machine)-[:OWNS]->(:Project)-[:HAS]->(:Task)
- *   (:Project)-[:LEARNED_ALIAS {source, ts}]->(:Alias {text, kind})
+ *   (:Project)-[:LEARNED_ALIAS {source, ts}]->(:Alias {text, kind, projectId})
  *   (:Utterance)-[:TAUGHT]->(:Alias)                 -- provenance, written at runtime
  *   (:Episode:Memory {text, ts, status})-[:ABOUT]->(:Project)
  *   (:Heard {text})-[:LAST_MEANT {ts}]->(:Project)   -- written when a clarification is answered
@@ -18,6 +18,10 @@
  * "hint" (heard once, gates recall only, so the core still reports an honest
  * near match) or "confirmed" (the user said "yes, that's what I meant", joins
  * the project's names, and makes the next session resolve instantly).
+ *
+ * An alias *node* is keyed by (projectId, text): one project's confirmation
+ * can never flip another project's alias from hint to confirmed, and a name
+ * that would blur two projects is refused at learning time (see route.ts).
  */
 import type { Graph } from "falkordb";
 
@@ -66,7 +70,7 @@ export const SEED_STATEMENTS: ReadonlyArray<string> = [
   // One learned alias: voice heard "rival" for Rivvl. It gates candidate recall
   // but is only a hint — the core still reports a near match, never exact.
   `CREATE (:Alias {id: '${SEED_IDS.aliasRival}', text: 'rival', kind: 'hint',
-                   ts: '2026-10-08T09:12:00.000Z'})`,
+                   projectId: '${SEED_IDS.rivvl}', ts: '2026-10-08T09:12:00.000Z'})`,
   `MATCH (p:Project {id: '${SEED_IDS.rivvl}'}), (a:Alias {id: '${SEED_IDS.aliasRival}'})
    CREATE (p)-[:LEARNED_ALIAS {source: 'seed', ts: '2026-10-08T09:12:00.000Z'}]->(a)`,
   // Episodic memory: what the graph already knows about projects, newest last.

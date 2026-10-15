@@ -14,6 +14,8 @@
  *   ambiguous_name       several things are called that; the graph will not guess
  *
  * Reads go through FalkorDB's read-only API, so a tool bug cannot mutate data.
+ * Every payload is marked `untrusted: true`: the text inside is graph data —
+ * often replayed user speech — to reason about, never instructions to follow.
  */
 import { runRead, type GraphRow } from "./falkor.ts";
 
@@ -26,7 +28,7 @@ export type AskOutcome =
   | "unknown_name"
   | "ambiguous_name";
 
-export interface AskResult {
+export interface AskResultShape {
   readonly tool: string;
   readonly args: Readonly<Record<string, unknown>>;
   readonly outcome: AskOutcome;
@@ -34,6 +36,11 @@ export interface AskResult {
   readonly rows: ReadonlyArray<GraphRow>;
   readonly paths: ReadonlyArray<string>;
   readonly cypher: string;
+}
+
+/** A catalogue answer, marked untrusted; see the header note. */
+export interface AskResult extends AskResultShape {
+  readonly untrusted: true;
 }
 
 /** JSON-Schema tool descriptor, shared by the MCP server and any host. */
@@ -192,7 +199,7 @@ WHERE t.state = $state
 RETURN t.title AS task, t.state AS state, p.title AS project, m.name AS machine
 ORDER BY m.name, t.title`;
 
-async function whatsRunning(args: Readonly<Record<string, unknown>>): Promise<AskResult> {
+async function whatsRunning(args: Readonly<Record<string, unknown>>): Promise<AskResultShape> {
   const state = optionalString(args, "state");
   if (state !== undefined && !STATE_VALUES.includes(state as (typeof STATE_VALUES)[number])) {
     throw new Error(`argument "state" must be one of: ${STATE_VALUES.join(", ")}`);
@@ -242,6 +249,8 @@ interface BlastRow extends GraphRow {
   readonly title: string;
   readonly state?: string | null;
   readonly via: ReadonlyArray<string>;
+  readonly nodeLabels: ReadonlyArray<string>;
+  readonly rels: ReadonlyArray<string>;
   readonly hops: number;
 }
 
@@ -258,7 +267,10 @@ RETURN m.id AS id, m.name AS name, m.connected AS connected, m.disconnectedReaso
 
 const blastQuery = (depth: number): string => `MATCH path = (m:Machine {id: $machineId})-[:OWNS|HAS*1..${depth}]->(x)
 RETURN 'Task' IN labels(x) AS isTask, coalesce(x.title, x.name) AS title, x.state AS state,
-       [n IN nodes(path) | coalesce(n.name, n.title)] AS via, length(path) AS hops
+       [n IN nodes(path) | coalesce(n.name, n.title)] AS via,
+       [n IN nodes(path) | CASE WHEN 'Task' IN labels(n) THEN 'Task' ELSE 'Project' END] AS nodeLabels,
+       [r IN relationships(path) | type(r)] AS rels,
+       length(path) AS hops
 ORDER BY hops, title`;
 
 const MIRRORS_QUERY = `MATCH (m:Machine {id: $machineId})-[:OWNS]->(p:Project)
@@ -268,7 +280,7 @@ RETURN p.title AS project, other.name AS mirrorMachine, other.connected AS mirro
        mirror.workspaceRoot AS mirrorRoot
 ORDER BY project, mirrorMachine`;
 
-async function machineBlastRadius(args: Readonly<Record<string, unknown>>): Promise<AskResult> {
+async function machineBlastRadius(args: Readonly<Record<string, unknown>>): Promise<AskResultShape> {
   const machineName = requiredString(args, "machine");
   const depth = optionalInteger(args, "depth", 2, 1, 2);
   const resolved = await runRead<MachineRow>(MACHINE_RESOLVE_QUERY, { name: machineName });
@@ -293,17 +305,20 @@ async function machineBlastRadius(args: Readonly<Record<string, unknown>>): Prom
   const tasks = rows.filter((row) => row.isTask);
   const mirrors = mirrorRows.filter((row) => typeof row.mirrorMachine === "string");
   const paths: string[] = rows.map((row) => {
+    // Walk the actual nodes and relationship types the query returned: the
+    // traversal is `[:OWNS|HAS*1..depth]`, so parity-based guessing would
+    // render a Machine-[:HAS]->Task shape with the wrong labels.
     const nodes: Array<{ label: "Project" | "Task"; props: string }> = [];
     const rels: Array<"OWNS" | "HAS"> = [];
     for (let index = 1; index < row.via.length; index += 1) {
-      const isTask = index % 2 === 0;
+      const isTask = row.nodeLabels[index] === "Task";
       const name = row.via[index] ?? "?";
       const props =
         isTask && typeof row.state === "string" && index === row.via.length - 1
           ? `title: ${quoted(name)}, state: ${quoted(row.state)}`
           : `title: ${quoted(name)}`;
       nodes.push({ label: isTask ? "Task" : "Project", props });
-      rels.push(isTask ? "HAS" : "OWNS");
+      rels.push(row.rels[index - 1] === "HAS" ? "HAS" : "OWNS");
     }
     return chainLine({ machine: machine.name, rels, nodes });
   });
@@ -382,7 +397,7 @@ RETURN e.text AS text, e.ts AS ts, e.status AS status
 ORDER BY e.ts DESC
 LIMIT $limit`;
 
-async function projectHistory(args: Readonly<Record<string, unknown>>): Promise<AskResult> {
+async function projectHistory(args: Readonly<Record<string, unknown>>): Promise<AskResultShape> {
   const project = requiredString(args, "project");
   const machine = optionalString(args, "machine");
   const limit = optionalInteger(args, "limit", 5, 1, 20);
@@ -476,12 +491,10 @@ WHERE toLower(p.title) = toLower($text)
 RETURN p.title AS project, m.name AS machine
 ORDER BY machine`;
 
-async function whyHeard(args: Readonly<Record<string, unknown>>): Promise<AskResult> {
+async function whyHeard(args: Readonly<Record<string, unknown>>): Promise<AskResultShape> {
   const text = requiredString(args, "text");
   const aliasRows = await runRead<AliasRow>(WHY_ALIAS_QUERY, { text });
   if (aliasRows.length > 0) {
-    const first = aliasRows[0] as AliasRow;
-    const confirmed = first.kind === "confirmed";
     const paths: string[] = [];
     for (const row of aliasRows) {
       paths.push(
@@ -493,6 +506,22 @@ async function whyHeard(args: Readonly<Record<string, unknown>>): Promise<AskRes
         );
       }
     }
+    // One heard word can only mean one project; if several own the same text,
+    // say so instead of narrating whichever came first.
+    const owners = [...new Set(aliasRows.map((row) => row.project))];
+    if (owners.length > 1) {
+      return {
+        tool: "why_heard",
+        args: { text },
+        outcome: "ambiguous_name",
+        summary: `${quoted(text)} maps to ${owners.length} projects (${owners.join(", ")}) — the graph will not guess which one you meant.`,
+        rows: aliasRows,
+        paths,
+        cypher: WHY_ALIAS_QUERY,
+      };
+    }
+    const first = aliasRows[0] as AliasRow;
+    const confirmed = first.kind === "confirmed";
     const where = first.machine == null ? "" : ` on ${first.machine}`;
     const taught =
       typeof first.taughtText === "string"
@@ -549,13 +578,13 @@ export async function askGraph(
 ): Promise<AskResult> {
   switch (tool) {
     case "whats_running":
-      return whatsRunning(args);
+      return { ...(await whatsRunning(args)), untrusted: true };
     case "machine_blast_radius":
-      return machineBlastRadius(args);
+      return { ...(await machineBlastRadius(args)), untrusted: true };
     case "project_history":
-      return projectHistory(args);
+      return { ...(await projectHistory(args)), untrusted: true };
     case "why_heard":
-      return whyHeard(args);
+      return { ...(await whyHeard(args)), untrusted: true };
     default:
       throw new Error(
         `unknown tool "${tool}" — the catalogue is fixed: ${ASK_TOOLS.map((entry) => entry.name).join(", ")}`,

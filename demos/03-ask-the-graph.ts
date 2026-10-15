@@ -89,7 +89,9 @@ if (response !== null) {
   const text = parsed.result?.content?.[0]?.text;
   if (typeof text === "string") {
     const payload = JSON.parse(text) as { outcome: string; summary: string };
-    console.log(`← { outcome: "${payload.outcome}", summary: "${payload.summary}" }  (paths, memory, and Cypher included)`);
+    console.log(
+      `← { outcome: ${JSON.stringify(payload.outcome)}, summary: ${JSON.stringify(payload.summary)} }  (paths, memory, and Cypher included)`,
+    );
   }
 }
 console.log("Any MCP host gets this by running: node mcp/server.ts");

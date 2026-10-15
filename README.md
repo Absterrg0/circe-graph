@@ -9,7 +9,7 @@ Circe turns a spoken request ("start a task in Rivvl to fix the login bug") into
 3. **Learning** — confirm a mishearing once and it becomes a confirmed alias; the next session resolves the same words outright. The graph gets better at its job.
 4. **Reasoning** — a fixed catalogue of validated graph questions (blast radius, what's running, project history, why a word means a project) exposed over MCP.
 
-The deterministic grounding core (`groundVoiceTurn`, `projectChoice`) is copied byte-identical: the graph feeds the core and remembers what happened; it never second-guesses pronunciation.
+The deterministic grounding core (`groundVoiceTurn`, `projectChoice`) is copied **byte-identical** (sha256-matched against `circe-core`; only the test runner's import line differs): the graph feeds the core and remembers what happened; it never second-guesses pronunciation.
 
 ## Why this wins (judging criteria, mapped)
 
@@ -17,9 +17,9 @@ The deterministic grounding core (`groundVoiceTurn`, `projectChoice`) is copied 
 | --- | --- |
 | **The graph does work the agent could not do without it** | Run `pnpm demo:memory`: session A only earns "Did you mean Rivvl?"; after one confirmation the answer is a `(:Project)-[:LEARNED_ALIAS]->(:Alias)` with `(:Utterance)-[:TAUGHT]->(:Alias)` provenance. Session B — same words, fresh process — is `answered_from_memory`. Delete the graph and the agent is back to guessing. |
 | **The same question twice, with depth** | `pnpm demo:ask` case 3–4: `machine_blast_radius(depth: 1)` says which project stops; `depth: 2` adds which task stops. One parameter, the graph changes the answer's scope — not a prompt. |
-| **"Not in the graph" is a distinct answer** | Six typed outcomes, never conflated: `answered_with_path`, `answered_from_memory`, `needs_confirmation`, `needs_clarification`, `not_in_graph` (name heard, nothing matches it), `no_project_named`. The demo prints the outcome for every turn. |
+| **"Not in the graph" is a distinct answer** | Six typed outcomes, never conflated: `answered_with_path`, `answered_from_memory`, `needs_confirmation`, `needs_clarification`, `not_in_graph` (name heard, nothing matches it — the heard name is returned as `unmatchedName`), `no_project_named`. The demo prints the outcome for every turn. |
 | **Every answer carries its path** | Every route and every tool answer returns the human-readable MATCH chain (`(:Machine)-[:OWNS]->(:Project)-[:LEARNED_ALIAS]->(:Alias) [matched …]`) plus the exact Cypher and its parameters. `/why` is a graph fact, not a retelling. |
-| **Fixed tool catalogue, no model-written Cypher** | Five reviewed tools (`route_request`, `whats_running`, `machine_blast_radius`, `project_history`, `why_heard`) with named parameters, JSON schemas, and argument validation against the graph — served over a zero-dependency MCP stdio server (`node mcp/server.ts`). |
+| **Fixed tool catalogue, no model-written Cypher** | Five reviewed tools (`route_request`, `whats_running`, `machine_blast_radius`, `project_history`, `why_heard`) with named parameters, JSON schemas, and argument validation against the graph — served over a no-SDK MCP stdio server (`node mcp/server.ts`; the JSON-RPC loop is hand-written, the only dependency is the official `falkordb` client). |
 | **Name resolution before reasoning** | The router resolves names against the graph (exact windows → core scoring → confirmation/clarification); the ask tools resolve machines, projects, and aliases against the graph first, and return `unknown_name` / `ambiguous_name` instead of a confident wrong answer. A typo can't become a wrong action. |
 | **Memory is more nodes, connected** | Episodes are `(:Episode:Memory)-[:ABOUT]->(:Project)`; clarification answers are `(:Heard {text})-[:LAST_MEANT]->(:Project)`; confirmations are aliases with teaching provenance. Memory is read first (`memory` on every route), then extended. |
 
@@ -37,9 +37,11 @@ heard utterance ──▶ heardWindows ──▶ FalkorDB (exact pass: title / l
               ┌──────────────────────────┼──────────────────────────────┐
               ▼                          ▼                              ▼
    resolved / clarified         needs-confirmation              needs-clarification
-   → write :Utterance,          → write nothing (live state)    → write question;
-     :Episode -[:ABOUT]->                                         offer machine-qualified
-     :Project                                                     options + last-meant hint
+   → write :Utterance,          → write nothing (live state)    → write question
+     :Episode -[:ABOUT]->                                         (no episode — nothing
+     :Project                                                     to be ABOUT yet); offer
+                                                                  machine-qualified
+                                                                  options + last-meant hint
               │                          │                              │
               │              confirmed?  │                              │ answered via
               │◀── route.learned ────────┘                              │ projectChoice?
@@ -53,14 +55,17 @@ heard utterance ──▶ heardWindows ──▶ FalkorDB (exact pass: title / l
 
 ```
 (:User)-[:SAID]->(:Utterance)-[:RESOLVED_TO {match}]->(:Project)
+(:User)-[:SAID]->(:Utterance {status: "needs-clarification", options})   -- pending: no project yet
 (:Utterance)-[:TAUGHT]->(:Alias)                       -- provenance: what taught this word
 (:Machine)-[:OWNS]->(:Project)-[:HAS]->(:Task)
-(:Project)-[:LEARNED_ALIAS {source, ts}]->(:Alias {text, kind})
+(:Project)-[:LEARNED_ALIAS {source, ts}]->(:Alias {text, kind, projectId})
 (:Episode:Memory {text, ts, status})-[:ABOUT]->(:Project)
 (:Heard {text})-[:LAST_MEANT {ts}]->(:Project)
 ```
 
-**Alias kinds are memory strength**: a `hint` (heard once, never confirmed) gates candidate recall but never joins a project's `names`, so the core still reports an honest near match; a `confirmed` alias (the user said "yes, that's what I meant") joins `names` and makes every future session resolve it outright.
+An `:Alias` node is keyed by `(projectId, text)`: identity is per project, so learning can never flip another project's alias from `hint` to `confirmed`.
+
+**Alias kinds are memory strength**: a `hint` (heard once, never confirmed) gates candidate recall but never joins a project's `names`, so the core still reports an honest near match; a `confirmed` alias (the user said "yes, that's what I meant") joins `names` and makes every future session resolve it outright. Learning **refuses** a text that is another project's title or alias — a blurred name is worse than an unlearned one, because every future recall would silently pick one of the two; the route reports the refusal (`learningRefused`) instead of quietly teaching it.
 
 Seeded catalog (`pnpm seed`):
 
@@ -86,10 +91,10 @@ Three machines, three projects (Portfolio exists twice — that is what forces c
 | `answered_from_memory` | Resolved because a **confirmed alias** from a previous session matched | yes: utterance + episode |
 | `needs_confirmation` | Phonetics found a plausible target but spelling is below threshold | no — live conversation state |
 | `needs_clarification` | A real ambiguity (duplicate title); machine-qualified options offered, last-meant hint shown | question + options |
-| `not_in_graph` | A name was heard but nothing in the graph matches it ("In Javis, …") | as a clarification question |
+| `not_in_graph` | A name was heard but nothing in the graph matches it ("In Javis, …"); the heard name is returned as `unmatchedName` | a clarification question when the core asked; nothing when the shape folded into "no mention" |
 | `no_project_named` | No project slot at all ("what is running right now") | nothing |
 
-Clarification **answers** are resolutions: `answerClarification(utterance, answer)` uses the copied `projectChoice` matcher (machine names like "laptop" are legitimate disambiguation vocabulary there) and writes `:Utterance -[:RESOLVED_TO]-> :Project`, an episode `-[:ABOUT]->` the project, and `(:Heard {text})-[:LAST_MEANT]->(:Project)`. The next identical ask still asks — ambiguity is a fact, not a cache miss — but shows the user their own precedent.
+Clarification **answers** are resolutions: `answerClarification(utterance, answer)` uses the copied `projectChoice` matcher (machine names like "laptop" are legitimate disambiguation vocabulary there) and writes `:Utterance -[:RESOLVED_TO]-> :Project`, an episode `-[:ABOUT]->` the project, and `(:Heard {text})-[:LAST_MEANT]->(:Project)`. The next identical ask still asks — ambiguity is a fact, not a cache miss — but shows the user their own precedent. If the chosen copy sits on a disconnected machine, the answer reports it (`disconnectedMachine`) rather than pretending the machine is up.
 
 ## Quickstart
 
@@ -97,14 +102,17 @@ Needs Node 24 (runs `.ts` directly), pnpm, and Docker.
 
 ```sh
 pnpm install
-docker compose up -d        # FalkorDB on localhost:6379 + Browser on localhost:3000
+pnpm db:up                  # FalkorDB on localhost:6379 + Browser on localhost:3000
+                            # (docker compose up -d --wait; ports bound to loopback)
 pnpm seed                   # load the demo catalog
 
 pnpm demo                   # 1 · grounding: five routes, each with its Cypher path
 pnpm demo:memory            # 2 · the graph learns across sessions (the money demo)
 pnpm demo:ask               # 3 · the tool catalogue: blast radius, memory, why-heard, MCP
-pnpm test                   # 52 tests against live FalkorDB (own graphs, never demo data)
+pnpm test                   # 59 tests against live FalkorDB (own graphs, never demo data)
 ```
+
+No configuration is needed for local use; `cp .env.example .env` to point the same code at another host (see [Environment](#environment--deployment)).
 
 All three demos reset the graph to the seed first, so their output is deterministic and reproducible. Open **http://localhost:3000** (FalkorDB Browser, ships in the same container) and select the graph `circe` to watch the demos' writes appear live.
 
@@ -128,27 +136,37 @@ All three demos reset the graph to the seed first, so their output is determinis
 
 ## The fixed tool catalogue
 
-`src/ask.ts` — hand-written Cypher, named parameters, arguments resolved against the graph before anything runs. Reads go through FalkorDB's read-only API (`roQuery`), so a tool bug cannot mutate the graph.
+`src/ask.ts` — hand-written Cypher, named parameters, arguments resolved against the graph before anything runs. The four ask tools read through FalkorDB's read-only API (`roQuery`), so a query bug there cannot mutate the graph. `route_request` is deliberately the one tool that **writes**: routing a turn is what records the utterance, the episode, and any learned alias. That is where memory comes from — and it is the write path a host should treat as privacy-visible.
 
 | Tool | Question | Graph shape it uses | Outcomes |
 | --- | --- | --- | --- |
 | `whats_running` (`state?`) | What's in flight? | `(Machine)-[:OWNS]->(Project)-[:HAS]->(Task)` | `answered_with_path` |
 | `machine_blast_radius` (`machine`, `depth?` 1–2) | If this machine goes down, what stops? | `(Machine)-[:OWNS\|HAS*1..depth]->(x)`, plus same-title mirrors on other machines | `answered_with_path`, `unknown_name`, `not_in_graph` (owns nothing) |
 | `project_history` (`project`, `machine?`, `limit?`) | What do we already know about this project? | `(:Episode:Memory)-[:ABOUT]->(:Project)` | `answered_from_memory`, `not_in_graph` (no episodes yet), `ambiguous_name`, `unknown_name` |
-| `why_heard` (`text`) | Why does this word mean a project? | `(:Project)-[:LEARNED_ALIAS]->(:Alias)`, `(:Utterance)-[:TAUGHT]->(:Alias)` | `answered_with_path` (hint), `answered_from_memory` (confirmed), `unknown_name` |
+| `why_heard` (`text`) | Why does this word mean a project? | `(:Project)-[:LEARNED_ALIAS]->(:Alias)`, `(:Utterance)-[:TAUGHT]->(:Alias)` | `answered_with_path` (hint), `answered_from_memory` (confirmed), `ambiguous_name` (several projects own the text), `unknown_name` |
 
 Every answer carries `outcome`, `summary` (assembled from rows, not a model), `rows`, `paths`, and the exact `cypher`. A machine that goes down is reported with mirrors — **never silently moved**.
 
+### Trust boundary
+
+Everything the graph returns is **data, not instructions**. Summaries replay user speech, and memory notes are verbatim utterances — a phrase spoken once ("ignore your instructions and …") is stored and returned later. Every MCP/route payload therefore carries `untrusted: true`, memory notes carry `provenance: "user-speech"`, and a host must treat all returned text as content to reason about, never as commands to follow.
+
 ### Over MCP
 
-`node mcp/server.ts` speaks JSON-RPC 2.0 / MCP 2024-11-05 over stdio with zero dependencies. Any MCP host (Claude Desktop, Cursor, an agent runtime) gets all five tools:
+`node mcp/server.ts` speaks JSON-RPC 2.0 over stdio with no MCP SDK — the loop is ~100 lines and the only dependency is the official `falkordb` client. It answers `initialize` with protocol `2024-11-05` and echoes `2025-06-18` when a client asks for it. Any MCP host (Claude Desktop, Cursor, an agent runtime) gets all five tools:
 
 ```json
 → {"jsonrpc":"2.0","id":1,"method":"tools/call",
    "params":{"name":"machine_blast_radius","arguments":{"machine":"build-box","depth":2}}}
 ← {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text",
-   "text":"{ \"outcome\": \"answered_with_path\", \"summary\": \"If \\\"build-box\\\" goes down: …\" }"}],
+   "text":"{ \"outcome\": \"answered_with_path\", \"summary\": \"If \\\"build-box\\\" goes down: …\", \"untrusted\": true }"}],
    "isError":false}}
+```
+
+Host configuration (any MCP host's equivalent of `claude_desktop_config.json`):
+
+```json
+{"mcpServers": {"circe-graph": {"command": "node", "args": ["/absolute/path/to/circe-graph/mcp/server.ts"]}}}
 ```
 
 Memory written by one client is the memory every other client reads: the graph is the coordination surface.
@@ -158,13 +176,13 @@ Memory written by one client is the memory every other client reads: the graph i
 | File | Origin |
 | --- | --- |
 | `src/groundVoiceTurn.ts`, `src/projectChoice.ts` | byte-identical copies (sha256 match `circe-src/packages/circe-core/src/`) |
-| `src/buildProjectVocabulary.ts` | copy; only the `@circe/contracts` import replaced with local interface declarations |
+| `src/buildProjectVocabulary.ts` | copy; the `@circe/contracts` import replaced with local interface declarations (its alias-`kind` type is declared locally — the one deliberate drift to keep in sync) |
 | `src/groundVoiceTurn.test.ts`, `src/projectChoice.test.ts` | copies; only the test-runner import changed to `vitest` |
 | `src/buildProjectVocabulary.test.ts` | adapted; fixtures no longer use `effect`/`ProjectId` |
 | `src/catalog.ts` | **new** — `getCandidates(heard)` via Cypher: exact pass, then catalog fallback; alias kinds steer evidence |
 | `src/route.ts` | **new** — `routeWithGraph`, `confirmRoute`, `answerClarification`: candidates → core → memory read → write-back → learning → typed outcome |
 | `src/ask.ts` | **new** — the fixed tool catalogue with argument validation and typed outcomes |
-| `mcp/server.ts` | **new** — zero-dependency MCP stdio server |
+| `mcp/server.ts` | **new** — MCP stdio server, hand-written JSON-RPC (no SDK) |
 | `src/falkor.ts` | **new** — connection, tenant-aware graph naming, `runCypher` / `runRead` |
 | `src/seedGraph.ts`, `seed.ts` | **new** — the demo catalog |
 | `src/catalog.test.ts`, `src/route.test.ts`, `src/ask.test.ts`, `mcp/server.test.ts` | **new** — live-FalkorDB tests |
@@ -174,36 +192,58 @@ Memory written by one client is the memory every other client reads: the graph i
 
 - **The core decides pronunciation; the graph decides everything else.** Fuzzy scoring lives in exactly one place (the copied core), so the graph can never disagree with it about what a name sounds like. The graph's job is recall, memory, persistence, and reasoning.
 - **Hints vs confirmed aliases.** A hint narrows recall but never becomes a `name` (so "rival" honestly reports `near`); a confirmed alias joins `names` (so "zivil" resolves as `confirmed-pronunciation`). The difference is the user's own confirmation — the graph stores *evidence strength*, not just facts.
-- **Learning happens at the confirmation seam.** `confirmRoute` persists the turn and teaches the graph one alias with provenance (`TAUGHT`). A confirmation of a canonical title teaches nothing (guarded).
+- **Learning happens at the confirmation seam.** `confirmRoute` persists the turn and teaches the graph one alias with provenance (`TAUGHT`). A confirmation of a canonical title teaches nothing, and a name that belongs to another project (title or alias) is **refused** with a reason (`learningRefused`) — the graph would rather stay unlearned than blur two projects. Alias nodes are keyed by `(projectId, text)`, so one project's confirmation can never flip another's hint into confirmed.
 - **Ambiguity is never cached away.** `LAST_MEANT` is shown, not applied: the router still asks.
 - **A disconnected machine is reported, never swapped.** Both Portfolios stay distinct; the build-box copy carries `connected: false`; a route targeting it returns `disconnectedMachine` (with reason) instead of rerouting to laptop.
-- **Only settled facts are written.** Resolved and clarified turns produce utterances/episodes; answered clarifications add `LAST_MEANT`; pending confirmations and non-mentions write nothing.
-- **Reads are read-only.** Catalog lookups, recall, and every tool query go through `roQuery`.
+- **Only settled facts are written — and every write is verified.** Resolved turns produce the utterance, its `RESOLVED_TO` edge, and an episode `ABOUT` the project; clarified turns record the question and its options (no episode — it has no project to be about); answered clarifications add an episode and update `LAST_MEANT` in place; pending confirmations and non-mentions write nothing. Write-backs `RETURN` the project they touched and the call throws on zero rows: a route never claims to have recorded what it did not.
+- **Reads are read-only; one tool writes.** Catalog lookups, recall, and the four ask tools go through `roQuery`; `route_request` is the single, deliberate write path.
 - **Statements run one at a time.** FalkorDB rejects multi-statement queries, so the seed is a statement list.
 
 ## Tests
 
-`pnpm test` runs **52 tests** against a live FalkorDB on separate graphs (`circe_test_catalog`, `circe_test_route`, `circe_test_ask`, `circe_test_mcp`):
+`pnpm test` runs **59 tests** against a live FalkorDB on separate graphs (`circe_test_catalog`, `circe_test_route`, `circe_test_route_learning`, `circe_test_ask`, `circe_test_mcp`). The suite is order-independent (`vitest run --sequence.shuffle` passes); the learning flow lives in its own file and graph because teaching the graph is permanent state.
 
 - **Copied core**: all `groundVoiceTurn`, `projectChoice`, and vocabulary cases, unchanged — the guarantee that graph-backed candidates didn't alter grounding semantics.
 - **`catalog`**: exact title match; hint alias gates recall without joining `names`; confirmed alias joins `names`; duplicate Portfolio across machines (both kept, build-box marked disconnected); catalog fallback.
-- **`route`**: exact route + write-back + memory read; near ≥ 0.8 via hint alias (Zivil at 0.6 asks); duplicate-title clarification; disconnected target reported, not swapped; `not_in_graph` classification ("In Javis, …"); clarification answered via `projectChoice`, `LAST_MEANT` persisted, repeat ask still asks but carries precedent; non-mention writes nothing; **learning**: confirm `zivil` → alias + `TAUGHT` provenance → next session `answered_from_memory`.
-- **`ask`**: traversal paths; depth 1 vs 2 scope change; mirrors reported; `unknown_name` / `ambiguous_name` / `not_in_graph`; argument validation; fixed catalogue shape.
-- **`mcp`**: initialize / tools/list / tools/call round trips, unknown methods (`-32601`), parse errors (`-32700`), notifications get no response.
+- **`route`**: exact route + write-back + memory read (notes carry `provenance: "user-speech"`); near ≥ 0.8 via hint alias (Zivil at 0.6 asks); duplicate-title clarification; disconnected target reported, not swapped — and reported again when a clarification resolves to it; `not_in_graph` for both the asked shape ("In Javis, …") and natural phrasings ("open Javis" → `unmatchedName: "Javis"`); a stale `confirmedCandidateId` is flagged, not taught; clarification answered via `projectChoice`, `LAST_MEANT` upserted, repeat ask still asks but carries precedent; a non-mention writes nothing; recalled memory is globally newest-first.
+- **`route.learning`** (own graph, because teaching is permanent): confirm `zivil` → alias + `TAUGHT` provenance → next session `answered_from_memory`; alias nodes keyed per project; refusals for another project's title or alias; canonical-title no-op.
+- **`ask`**: traversal paths built from the real nodes and relationship types; depth 1 vs 2 scope change; mirrors reported; `unknown_name` / `ambiguous_name` (including several projects owning one alias text) / `not_in_graph`; payloads marked untrusted; argument validation; fixed catalogue shape.
+- **`mcp`**: initialize / tools/list / tools/call round trips (protocol echo for `2025-06-18`, fallback for unknown versions), unknown methods (`-32601`), parse errors (`-32700`), batch arrays rejected (`-32600`), `"id": null` answered (only a missing `id` is a notification), route payloads marked untrusted.
 
 ## Environment & deployment
 
 | Variable | Effect |
 | --- | --- |
-| `CIRCE_GRAPH` | Graph name (default `circe`). Tests override it to their own graphs. |
+| `CIRCE_GRAPH` | Graph name (default `circe`). Takes precedence over `CIRCE_TENANT`. Tests override it to their own graphs. |
 | `CIRCE_TENANT` | Tenant isolation: selects graph `circe:<tenant>` — one tenant per graph, so a `WHERE` clause nobody can forget is never the isolation boundary. |
+| `FALKOR_URL` | Full connection URL (e.g. `rediss://user:password@host:port`); wins over host/port. |
 | `FALKOR_HOST`, `FALKOR_PORT` | FalkorDB connection (default `localhost:6379`). |
+| `FALKOR_TLS` | `1` wraps the host/port socket in TLS (a managed FalkorDB behind a TLS proxy). |
 
-Point `FALKOR_HOST/PORT` at a FalkorDB Cloud instance (with TLS env as needed) and the same code runs against a hosted graph; the Browser ships with the local container at `localhost:3000`.
+Point `FALKOR_URL` (or `FALKOR_HOST/PORT` + `FALKOR_TLS=1`) at a hosted instance and the same code runs against a FalkorDB Cloud graph; the Browser ships with the local container at `localhost:3000`. The engine image is pinned by digest (`falkordb/falkordb@sha256:1074…`) in both `docker-compose.yml` and CI, so Cypher behaviour cannot change mid-event, and the container's ports are bound to `127.0.0.1` only.
+
+CI (`.github/workflows/ci.yml`) runs `pnpm install --frozen-lockfile`, `pnpm typecheck`, and `pnpm test` against a FalkorDB service container pinned to the same digest.
+
+## How this grafts into Circe
+
+circe-graph is not a parallel product — it is a seam. The Circe app builds project candidates in four places and keeps them in memory; each becomes a call site for `getCandidates(heard)` (`src/catalog.ts`), which returns the shape the core already consumes — so the copied `groundVoiceTurn` / `projectChoice` code does not change at all. Concretely:
+
+- **Candidates**: swap the in-memory array for `getCandidates`; the graph becomes the source of truth. (If FalkorDB is down there is no silent fallback to a stale cache — the failure is honest.)
+- **Memory index**: the graph is an optional memory index behind the catalog seam. The app's SQLite keeps working; the graph adds what one machine's SQLite cannot know: cross-machine episodes, blast radius, alias provenance (`TAUGHT`), and hint aliases that gate recall without acting.
+- **Server ownership**: the app server owns the FalkorDB connection (one client per process, `src/falkor.ts`); the MCP server is a thin host on the same graph, so an in-app agent and a desktop agent share one memory.
+- **Alias learning** complements the app's existing confirmation flow: SQLite remembers per-machine aliases at confirmation; the graph additionally refuses names that would blur two projects, keeps the utterance that taught each alias, and carries the memory across machines.
+- **Demo vs product**: the CLI demos and the MCP server are the hackathon surface — they exercise the exact `routeWithGraph` / `askGraph` functions a host integration would call, not a fork of them.
+
+## Built with
+
+This repo was built with AI-assistant involvement: the implementation was written by an AI coding agent under human direction and review, and every behavioural claim in this README is reproducible from the tests and demos in this repo.
 
 ## Limits (honest)
 
 - Clarification answers are wired (`answerClarification`), but a host must pass the pending utterance back — there is no long-lived session store beyond the graph.
 - Alias learning happens at confirmations of mishearings; it does not (yet) learn from clarification answers ("laptop" is remembered as `LAST_MEANT`, not as an alias of a machine).
+- The exact pass compares `toLower(window) = toLower(text)` while the core normalizes more aggressively (punctuation stripped), so a name differing only by punctuation can miss the exact pass and be caught by the scoring passes instead of resolving instantly.
+- Nothing prunes the graph: episodes and utterances accumulate with no retention policy, and `LAST_MEANT` is upserted but never expires. A production shape would add a per-tenant TTL policy.
+- One local identity (`:User {id: "user-local"}`); multi-user attribution would key the same schema by real user ids.
 - The fuzzy fallback reads the whole bounded catalog per turn; a larger catalog would push more blocking (initial letter, Soundex tail) into Cypher.
 - `machine_blast_radius` depth is capped at 2 because the seeded graph is Machine→Project→Task; the traversal generalizes but the demo graph is deliberately small.

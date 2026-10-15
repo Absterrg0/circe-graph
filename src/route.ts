@@ -46,6 +46,12 @@ export interface MemoryNote {
   readonly projectId: string;
   readonly text: string;
   readonly ts: string;
+  /**
+   * Recalled text is user speech replayed to a reasoning host: data to reason
+   * about, never instructions to follow.
+   */
+  readonly provenance: "user-speech";
+  readonly untrusted: true;
 }
 
 /** What an identical ambiguous phrase meant the last time it was answered. */
@@ -61,6 +67,12 @@ export interface LearnedAlias {
   readonly text: string;
   readonly projectId: string;
   readonly utteranceId: string;
+}
+
+/** Set when a confirmation was refused because it would blur two projects. */
+export interface AliasLearningRefused {
+  readonly text: string;
+  readonly reason: string;
 }
 
 /**
@@ -92,6 +104,12 @@ export interface GraphRoute {
   readonly lastMeant?: LastMeant;
   /** Set when this turn taught the graph a confirmed pronunciation. */
   readonly learned?: LearnedAlias;
+  /** Set when learning was refused to keep two projects distinct. */
+  readonly learningRefused?: AliasLearningRefused;
+  /** The phrase named something, but nothing in the graph matched it. */
+  readonly unmatchedName?: string;
+  /** A confirmedCandidateId that was never among this phrase's candidates. */
+  readonly confirmedTargetNotOffered?: true;
   /** Present when the routed (or pending) project sits on a disconnected machine. */
   readonly disconnectedMachine?: DisconnectedMachine;
 }
@@ -130,12 +148,16 @@ WITH ut
 MATCH (p:Project {id: $projectId})
 CREATE (ut)-[:RESOLVED_TO {match: $match}]->(p)
 CREATE (e:Episode:Memory {id: $episodeId, text: $text, ts: $ts, status: 'resolved'})
-CREATE (e)-[:ABOUT]->(p)`;
+CREATE (e)-[:ABOUT]->(p)
+RETURN ut.id AS utteranceId, p.id AS projectId`;
 
+// The question is settled conversation state, not a settled fact: the
+// utterance records it (with the options offered), but no episode is written —
+// an episode with no project to be ABOUT would be invisible to every recall.
 const CLARIFIED_WRITE_BACK = `MERGE (u:User {id: $userId})
 CREATE (ut:Utterance {id: $utteranceId, text: $text, ts: $ts, status: 'needs-clarification', heard: $heard, options: $options})
 CREATE (u)-[:SAID]->(ut)
-CREATE (e:Episode:Memory {id: $episodeId, text: $text, ts: $ts, status: 'needs-clarification'})`;
+RETURN ut.id AS utteranceId`;
 
 // A clarification answer is a resolution: it resolves the utterance, records
 // the episode, and remembers what this phrase meant (LAST_MEANT) so the next
@@ -149,16 +171,34 @@ CREATE (ut)-[:RESOLVED_TO {match: $answerKind}]->(p)
 CREATE (e:Episode:Memory {id: $episodeId, text: $text, ts: $ts, status: 'resolved', answer: $answer})
 CREATE (e)-[:ABOUT]->(p)
 MERGE (h:Heard {text: $heardText})
-CREATE (h)-[:LAST_MEANT {ts: $ts}]->(p)`;
+MERGE (h)-[lm:LAST_MEANT]->(p)
+ON CREATE SET lm.ts = $ts
+ON MATCH SET lm.ts = $ts
+RETURN ut.id AS utteranceId, p.id AS projectId`;
 
+// The alias node is keyed by (projectId, text): identity is per project, so
+// the ON MATCH below can only ever touch this project's own alias.
 const LEARN_ALIAS_WRITE = `MATCH (p:Project {id: $projectId})
 MATCH (ut:Utterance {id: $utteranceId})
-MERGE (a:Alias {text: $text})
+MERGE (a:Alias {projectId: $projectId, text: $text})
 ON CREATE SET a.id = $aliasId, a.kind = 'confirmed', a.ts = $ts
 ON MATCH SET a.kind = 'confirmed'
 MERGE (p)-[l:LEARNED_ALIAS]->(a)
 ON CREATE SET l.source = 'confirmation', l.ts = $ts
-MERGE (ut)-[:TAUGHT]->(a)`;
+MERGE (ut)-[:TAUGHT]->(a)
+RETURN a.text AS aliasText, p.id AS projectId`;
+
+/** Every other project's title and alias texts — the clash probe for learning. */
+const CLASH_PROBE_QUERY = `MATCH (other:Project)
+WHERE other.id <> $projectId
+OPTIONAL MATCH (other)-[:LEARNED_ALIAS]->(a:Alias)
+RETURN other.title AS title, collect(a.text) AS aliasTexts`;
+
+/** The target project's own title, for the canonical-title no-op check. */
+const OWN_TITLE_QUERY = `MATCH (p:Project {id: $projectId}) RETURN p.title AS title`;
+
+/** Whether a stale confirmedCandidateId still exists as a project. */
+const PROJECT_EXISTS_QUERY = `MATCH (p:Project {id: $projectId}) RETURN p.id AS projectId`;
 
 interface PathRow extends GraphRow {
   readonly projectId: string;
@@ -211,11 +251,21 @@ async function recallMemory(projectIds: ReadonlyArray<string>): Promise<Readonly
   for (const row of rows) {
     const notes = perProject.get(row.projectId) ?? [];
     if (notes.length < MEMORY_NOTES_PER_PROJECT) {
-      notes.push({ projectId: row.projectId, text: row.text, ts: row.ts });
+      notes.push({
+        projectId: row.projectId,
+        text: row.text,
+        ts: row.ts,
+        provenance: "user-speech",
+        untrusted: true,
+      });
       perProject.set(row.projectId, notes);
     }
   }
-  return [...perProject.values()].flat();
+  // Cap per project first (the query is newest-first), then restore one global
+  // newest-first order — a host may render this list exactly as it was sent.
+  return [...perProject.values()]
+    .flat()
+    .sort((left, right) => (left.ts < right.ts ? 1 : left.ts > right.ts ? -1 : 0));
 }
 
 /** What this exact phrase meant the last time a clarification answered it. */
@@ -318,22 +368,32 @@ interface TurnIds {
 /**
  * Durable memory for one turn. Resolved turns link the utterance to the
  * project it resolved to and record an episode ABOUT it; clarified turns keep
- * the question and the offered options. Pending confirmations and non-mentions
- * write nothing — they are live conversation state, not settled facts.
+ * the question and the offered options (no episode: an episode with no project
+ * to be ABOUT would be invisible to every later recall). Pending confirmations
+ * and non-mentions write nothing — they are live conversation state, not
+ * settled facts. Every write is verified: zero rows written throws rather than
+ * reporting a memory the graph does not have.
  */
 async function recordTurn(
   utterance: string,
   result: GroundedVoiceTurn<GraphProject>,
   ids: TurnIds,
 ): Promise<void> {
-  const base = { ...ids, text: utterance };
+  const { episodeId, ...turn } = ids;
+  const base = { ...turn, text: utterance };
   if (result.status === "resolved") {
-    await runCypher(RESOLVED_WRITE_BACK, {
+    const written = await runCypher<{ projectId: string }>(RESOLVED_WRITE_BACK, {
       ...base,
+      episodeId,
       heard: result.heard,
       match: result.match,
       projectId: result.project.id,
     });
+    if (written.length === 0) {
+      throw new Error(
+        `write-back failed: project ${result.project.id} no longer exists — the turn was not recorded`,
+      );
+    }
     return;
   }
   if (result.status === "needs-clarification") {
@@ -345,44 +405,115 @@ async function recordTurn(
   }
 }
 
+type LearnOutcome =
+  | { readonly kind: "learned"; readonly alias: LearnedAlias }
+  | { readonly kind: "refused"; readonly refusal: AliasLearningRefused }
+  | { readonly kind: "no-op" };
+
 /**
  * Learning: a confirmation is evidence. The heard phrasing becomes a
  * confirmed alias of the project — semantic memory the next session reads
  * before it reasons, so the same request resolves outright.
+ *
+ * The graph refuses one thing: a phrase that would blur two projects
+ * together. A text that is another project's title or alias is never learned —
+ * a blurred name is worse than an unlearned one, because every future recall
+ * would silently pick one of the two. Exported for hosts with their own
+ * confirmation UX and for tests; `confirmRoute` is the normal path.
  */
-async function learnConfirmedAlias(input: {
+export async function learnConfirmedAlias(input: {
   readonly heard: string;
   readonly projectId: string;
   readonly utteranceId: string;
-}): Promise<LearnedAlias | undefined> {
+}): Promise<LearnOutcome> {
   const text = normalizeName(input.heard);
-  if (text.length < 3) return undefined;
-  const titles = await runRead<{ folded: string }>(
-    "MATCH (p:Project {id: $projectId}) RETURN toLower(p.title) AS folded",
+  if (text.length < 3) return { kind: "no-op" };
+  const own = await runRead<{ title: string }>(OWN_TITLE_QUERY, { projectId: input.projectId });
+  const ownTitle = own[0]?.title;
+  // The canonical title already routes exactly; confirming it teaches nothing.
+  if (ownTitle !== undefined && normalizeName(ownTitle) === text) return { kind: "no-op" };
+  const clashRows = await runRead<{ title: string; aliasTexts: ReadonlyArray<string | null> }>(
+    CLASH_PROBE_QUERY,
     { projectId: input.projectId },
   );
-  // The canonical title already routes exactly; confirming it teaches nothing.
-  if (titles[0]?.folded === text) return undefined;
+  const titleClash = clashRows.find((row) => normalizeName(row.title) === text);
+  if (titleClash !== undefined) {
+    return {
+      kind: "refused",
+      refusal: {
+        text,
+        reason: `${JSON.stringify(text)} is another project's title (${JSON.stringify(titleClash.title)}) — learning it would blur two projects together`,
+      },
+    };
+  }
+  const aliasClash = clashRows.find((row) =>
+    row.aliasTexts.some(
+      (aliasText) => typeof aliasText === "string" && normalizeName(aliasText) === text,
+    ),
+  );
+  if (aliasClash !== undefined) {
+    return {
+      kind: "refused",
+      refusal: {
+        text,
+        reason: `${JSON.stringify(text)} already means another project (${JSON.stringify(aliasClash.title)}) — the graph will not blur the two`,
+      },
+    };
+  }
   const ts = new Date().toISOString();
-  await runCypher(LEARN_ALIAS_WRITE, {
+  const written = await runCypher<{ aliasText: string }>(LEARN_ALIAS_WRITE, {
     projectId: input.projectId,
     utteranceId: input.utteranceId,
     text,
     aliasId: `alias-${randomUUID()}`,
     ts,
   });
-  return { text, projectId: input.projectId, utteranceId: input.utteranceId };
+  if (written.length === 0) {
+    throw new Error(
+      `alias learning failed: project ${input.projectId} or utterance ${input.utteranceId} vanished mid-turn — nothing was learned`,
+    );
+  }
+  return {
+    kind: "learned",
+    alias: { text, projectId: input.projectId, utteranceId: input.utteranceId },
+  };
+}
+
+/**
+ * The core folds "a name sat in a project slot but nothing matched" into
+ * `not-mentioned` unless the syntax was its explicit comma form. The graph
+ * layer can still tell a host "a name was heard; nothing matches it" — this
+ * detects the slot the core rejected, using the same shapes of syntax the
+ * core itself accepts (a project-taking verb, or a trailing preposition).
+ * Labelling only: routing never consults it.
+ */
+function inferredUnmatchedName(utterance: string): string | undefined {
+  const trimmed = utterance.trim();
+  const verbObject =
+    /\b(?:check out|look at|inspect|review|open|work on|compare)\s+(?:the\s+)?(.+)$/iu.exec(trimmed);
+  const trailingPrep =
+    /\b(?:in|inside|within|on|for|of|to|into)\s+(?:the\s+)?([^,;.!?]+?)\s*[.!?]*$/iu.exec(trimmed);
+  const raw = verbObject?.[1] ?? trailingPrep?.[1];
+  if (raw === undefined) return undefined;
+  const slot = raw
+    .split(/[,;.!?]/u)[0]
+    ?.split(/\s+(?:to|and|then|also|so)\s+/iu)[0]
+    ?.trim();
+  return slot === undefined || slot.length === 0 ? undefined : slot;
 }
 
 /**
  * The six answer shapes. The graph's two clarification prompts are distinct in
  * the graph's terms: "More than one project matches" offers real options,
  * while "I couldn't match" means the spoken name is not in the graph at all.
+ * A natural phrasing the core folded into `not-mentioned` still classifies as
+ * not_in_graph when a name sat in a project slot (inferredUnmatchedName).
  */
 function classifyOutcome(
   result: GroundedVoiceTurn<GraphProject>,
   candidates: ReadonlyArray<GraphCandidate>,
   confirmedThisCall: boolean,
+  unmatchedName: string | undefined,
 ): RouteOutcome {
   switch (result.status) {
     case "resolved": {
@@ -399,21 +530,26 @@ function classifyOutcome(
     case "needs-clarification":
       return result.prompt.startsWith("I couldn't match") ? "not_in_graph" : "needs_clarification";
     case "not-mentioned":
-      return "no_project_named";
+      return unmatchedName === undefined ? "no_project_named" : "not_in_graph";
   }
 }
 
-function disconnectedTarget(
-  result: GroundedVoiceTurn<GraphProject>,
-): DisconnectedMachine | undefined {
-  if (result.status !== "resolved" && result.status !== "needs-confirmation") return undefined;
-  const { machine } = result.project;
+/** The structured "this machine is down" signal, from any project. */
+function disconnectedMachineOf(project: GraphProject): DisconnectedMachine | undefined {
+  const { machine } = project;
   if (machine.connected) return undefined;
   return {
     id: machine.id,
     name: machine.name,
     ...(machine.reason === undefined ? {} : { reason: machine.reason }),
   };
+}
+
+function disconnectedTarget(
+  result: GroundedVoiceTurn<GraphProject>,
+): DisconnectedMachine | undefined {
+  if (result.status !== "resolved" && result.status !== "needs-confirmation") return undefined;
+  return disconnectedMachineOf(result.project);
 }
 
 /**
@@ -435,6 +571,18 @@ export async function routeWithGraph(
       : { confirmedCandidateId: options.confirmedCandidateId }),
   });
   const confirmedThisCall = options.confirmedCandidateId !== undefined;
+  // The core folds an unmatched name into not-mentioned; the graph layer keeps
+  // the distinction (a name was heard vs none) alive for its outcome types.
+  // The clarification branch already names the heard span — trimmed to the
+  // name itself by inferredUnmatchedName, falling back to the core's raw span
+  // — and the folded branch is recovered from the utterance's syntax.
+  const unmatchedClarification =
+    result.status === "needs-clarification" && result.prompt.startsWith("I couldn't match");
+  const unmatchedName = unmatchedClarification
+    ? (inferredUnmatchedName(utterance) ?? result.heard)
+    : result.status === "not-mentioned" && lookup.pass === "catalog-fallback"
+      ? inferredUnmatchedName(utterance)
+      : undefined;
   const projectIds = matchedProjectIds(result);
   const [paths, memory] = await Promise.all([
     explainPaths(lookup.candidates, projectIds, { confirmedThisCall }),
@@ -449,17 +597,41 @@ export async function routeWithGraph(
   await recordTurn(utterance, result, ids);
 
   let learned: LearnedAlias | undefined;
+  let learningRefused: AliasLearningRefused | undefined;
   if (confirmedThisCall && result.status === "resolved" && result.match === "confirmed-pronunciation") {
-    learned = await learnConfirmedAlias({
-      heard: result.heard,
-      projectId: result.project.id,
-      utteranceId: ids.utteranceId,
-    });
+    if (result.span === undefined) {
+      // Confirmed with no audible mention of the project in this utterance:
+      // there is no phrasing to learn, and teaching the whole sentence as an
+      // alias would poison future recall.
+      learningRefused = {
+        text: normalizeName(result.heard),
+        reason:
+          "the utterance contains no audible mention of the confirmed project — nothing was taught",
+      };
+    } else {
+      const attempt = await learnConfirmedAlias({
+        heard: result.heard,
+        projectId: result.project.id,
+        utteranceId: ids.utteranceId,
+      });
+      if (attempt.kind === "learned") learned = attempt.alias;
+      else if (attempt.kind === "refused") learningRefused = attempt.refusal;
+    }
   }
+  // A host that confirms a candidate it was never offered (stale state, or a
+  // changed utterance) gets a flag, not the core's "no longer available" story.
+  const confirmedTargetNotOffered: true | undefined =
+    options.confirmedCandidateId !== undefined &&
+    !lookup.candidates.some((candidate) => candidate.id === options.confirmedCandidateId) &&
+    (await runRead<{ projectId: string }>(PROJECT_EXISTS_QUERY, {
+      projectId: options.confirmedCandidateId,
+    })).length > 0
+      ? true
+      : undefined;
   const lastMeant = result.status === "needs-clarification" ? await lastMeantFor(result.heard) : undefined;
   const disconnectedMachine = disconnectedTarget(result);
   return {
-    outcome: classifyOutcome(result, lookup.candidates, confirmedThisCall),
+    outcome: classifyOutcome(result, lookup.candidates, confirmedThisCall, unmatchedName),
     result,
     cypherPath: {
       query: lookup.query,
@@ -471,6 +643,9 @@ export async function routeWithGraph(
     memory,
     ...(lastMeant === undefined ? {} : { lastMeant }),
     ...(learned === undefined ? {} : { learned }),
+    ...(learningRefused === undefined ? {} : { learningRefused }),
+    ...(unmatchedName === undefined ? {} : { unmatchedName }),
+    ...(confirmedTargetNotOffered === undefined ? {} : { confirmedTargetNotOffered }),
     ...(disconnectedMachine === undefined ? {} : { disconnectedMachine }),
   };
 }
@@ -484,6 +659,8 @@ export interface ClarificationAnswer {
   readonly matchKind?: CirceProjectChoiceMatch["kind"];
   readonly matchedText?: string;
   readonly memory: ReadonlyArray<MemoryNote>;
+  /** Present when the chosen project sits on a disconnected machine. */
+  readonly disconnectedMachine?: DisconnectedMachine;
   readonly cypherPath: CypherPath;
 }
 
@@ -544,7 +721,7 @@ export async function answerClarification(
     episodeId: `episode-${randomUUID()}`,
     ts: new Date().toISOString(),
   };
-  await runCypher(ANSWER_WRITE_BACK, {
+  const written = await runCypher<{ projectId: string }>(ANSWER_WRITE_BACK, {
     ...ids,
     text: utterance,
     heard: pending.heard,
@@ -553,10 +730,16 @@ export async function answerClarification(
     answerKind: match.kind,
     projectId: chosen.id,
   });
+  if (written.length === 0) {
+    throw new Error(
+      `clarification write-back failed: project ${chosen.id} no longer exists — the answer was not recorded`,
+    );
+  }
   const [memory, paths] = await Promise.all([
     recallMemory([chosen.id]),
     explainPaths(lookup.candidates, [chosen.id], { confirmedThisCall: false }),
   ]);
+  const disconnectedMachine = disconnectedMachineOf(chosen.project);
   return {
     resolved: true,
     pending,
@@ -564,6 +747,7 @@ export async function answerClarification(
     matchKind: match.kind,
     matchedText: match.matchedText,
     memory,
+    ...(disconnectedMachine === undefined ? {} : { disconnectedMachine }),
     cypherPath: { ...lookupPath, paths },
   };
 }

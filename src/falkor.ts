@@ -35,12 +35,19 @@ let graph: Graph | undefined;
 
 async function connectClient(): Promise<FalkorDB> {
   if (client === undefined) {
-    client = await FalkorDB.connect({
-      socket: {
-        host: process.env.FALKOR_HOST ?? "localhost",
-        port: Number(process.env.FALKOR_PORT ?? 6379),
-      },
-    });
+    // FALKOR_URL (e.g. a FalkorDB Cloud rediss:// URL) wins when present;
+    // otherwise host/port, with FALKOR_TLS=1 to wrap the socket in TLS.
+    const url = process.env.FALKOR_URL;
+    client =
+      url !== undefined && url.length > 0
+        ? await FalkorDB.connect({ url })
+        : await FalkorDB.connect({
+            socket: {
+              host: process.env.FALKOR_HOST ?? "localhost",
+              port: Number(process.env.FALKOR_PORT ?? 6379),
+              ...(process.env.FALKOR_TLS === "1" ? { tls: true } : {}),
+            },
+          });
   }
   return client;
 }
@@ -65,13 +72,33 @@ export async function closeGraph(): Promise<void> {
  * Run one Cypher statement and return its rows. FalkorDB rejects queries with
  * more than one statement, so callers run statements one at a time.
  */
+/**
+ * A never-created graph rejects every query ("Invalid graph operation on
+ * empty key"); one plain read materializes it, then it behaves like any
+ * empty graph. Without this, first contact with a fresh tenant would throw
+ * a cryptic transport error instead of answering "not in the graph".
+ */
+const isEmptyGraphError = (error: unknown): boolean =>
+  error instanceof Error && /empty key/i.test(error.message);
+
+async function materializeEmptyGraph(selected: Graph): Promise<void> {
+  await selected.query("RETURN 1 AS probe");
+}
+
 export async function runCypher<T extends object = GraphRow>(
   cypher: string,
   params: CypherParams = {},
 ): Promise<ReadonlyArray<T>> {
   const selected = await getGraph();
-  const reply = await selected.query<T>(cypher, { params });
-  return reply.data ?? [];
+  try {
+    const reply = await selected.query<T>(cypher, { params });
+    return reply.data ?? [];
+  } catch (error) {
+    if (!isEmptyGraphError(error)) throw error;
+    await materializeEmptyGraph(selected);
+    const reply = await selected.query<T>(cypher, { params });
+    return reply.data ?? [];
+  }
 }
 
 /**
@@ -83,12 +110,24 @@ export async function runRead<T extends object = GraphRow>(
   params: CypherParams = {},
 ): Promise<ReadonlyArray<T>> {
   const selected = await getGraph();
-  const reply = await selected.roQuery<T>(cypher, { params });
-  return reply.data ?? [];
+  try {
+    const reply = await selected.roQuery<T>(cypher, { params });
+    return reply.data ?? [];
+  } catch (error) {
+    if (!isEmptyGraphError(error)) throw error;
+    await materializeEmptyGraph(selected);
+    const reply = await selected.roQuery<T>(cypher, { params });
+    return reply.data ?? [];
+  }
 }
 
-/** Count helper for scripts and tests. */
+const LABEL_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Count helper for scripts and tests. The label is interpolated, so it is validated. */
 export async function countNodes(label: string): Promise<number> {
+  if (!LABEL_PATTERN.test(label)) {
+    throw new Error(`countNodes: invalid label ${JSON.stringify(label)}`);
+  }
   const rows = await runRead<{ total: number }>(`MATCH (n:${label}) RETURN count(n) AS total`);
   return Number(rows[0]?.total ?? 0);
 }

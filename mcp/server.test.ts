@@ -30,6 +30,22 @@ describe("handleMcpMessage", () => {
       protocolVersion: "2024-11-05",
       serverInfo: { name: "circe-graph" },
     });
+    // A client asking for a protocol version this server knows is echoed it;
+    // an unknown one falls back to the default.
+    const newer = await call({
+      jsonrpc: "2.0",
+      id: 11,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18" },
+    });
+    expect(newer.result).toMatchObject({ protocolVersion: "2025-06-18" });
+    const unknown = await call({
+      jsonrpc: "2.0",
+      id: 12,
+      method: "initialize",
+      params: { protocolVersion: "1999-01-01" },
+    });
+    expect(unknown.result).toMatchObject({ protocolVersion: "2024-11-05" });
     const ping = await call({ jsonrpc: "2.0", id: 2, method: "ping" });
     expect(ping.result).toEqual({});
     const list = await call({ jsonrpc: "2.0", id: 3, method: "tools/list" });
@@ -60,10 +76,12 @@ describe("handleMcpMessage", () => {
     expect(result.isError).toBe(false);
     const payload = JSON.parse(result.content[0]?.text ?? "{}") as {
       outcome: string;
+      untrusted: boolean;
       paths: string[];
       memory: unknown[];
     };
     expect(payload.outcome).toBe("answered_with_path");
+    expect(payload.untrusted).toBe(true);
     expect(payload.paths[0]).toContain("Rivvl");
     expect(payload.memory.length).toBeGreaterThanOrEqual(2);
   });
@@ -103,6 +121,16 @@ describe("handleMcpMessage", () => {
     const unparsable = await handleMcpMessage("{oops");
     expect(unparsable).not.toBeNull();
     expect((JSON.parse(unparsable as string).error as { code: number }).code).toBe(-32700);
+
+    // No batch support: an array is rejected, not silently dropped.
+    const batch = await handleMcpMessage(JSON.stringify([{ jsonrpc: "2.0", id: 9, method: "ping" }]));
+    expect((JSON.parse(batch as string).error as { code: number }).code).toBe(-32600);
+
+    // An explicit "id": null is a request, not a notification.
+    const nullId = await handleMcpMessage(
+      JSON.stringify({ jsonrpc: "2.0", id: null, method: "ping" }),
+    );
+    expect(JSON.parse(nullId as string).result).toEqual({});
 
     expect(
       await handleMcpMessage(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })),

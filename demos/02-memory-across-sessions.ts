@@ -17,7 +17,7 @@
  *
  * Run: node demos/02-memory-across-sessions.ts   (resets the graph to seed first)
  */
-import { closeGraph, countNodes, getGraph, graphName, runCypher, type GraphRow } from "../src/falkor.ts";
+import { closeGraph, countNodes, getGraph, graphName, runCypher } from "../src/falkor.ts";
 import { answerClarification, confirmRoute, routeWithGraph } from "../src/route.ts";
 import { SEED_IDS, seedGraph } from "../src/seedGraph.ts";
 
@@ -120,8 +120,11 @@ const utterances = await countNodes("Utterance");
 const episodes = await countNodes("Episode");
 const aliases = await countNodes("Alias");
 const lastMeant = Number(
-  (await runCypher<GraphRow>("MATCH (:Heard)-[l:LAST_MEANT]->(:Project) RETURN count(l) AS total"))
-    .length,
+  (
+    await runCypher<{ total: number }>(
+      "MATCH (:Heard)-[l:LAST_MEANT]->(:Project) RETURN count(l) AS total",
+    )
+  )[0]?.total ?? 0,
 );
 console.log(
   `\nGraph memory now: ${utterances} utterances · ${episodes} episodes · ${aliases} aliases · last-meant remembered: ${lastMeant > 0}.`,
