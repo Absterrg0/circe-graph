@@ -51,6 +51,10 @@ heard utterance ──▶ heardWindows ──▶ FalkorDB (exact pass: title / l
    { outcome, result, cypherPath, memory, … }                     (:Project)
 ```
 
+The whole loop, live in FalkorDB Browser after `pnpm demo:memory` (26 nodes, 27 edges — every relationship the router wrote):
+
+![The circe graph in FalkorDB Browser: 9 labels, 26 nodes, 27 edges](docs/screenshots/graph.png)
+
 ## Graph schema
 
 ```
@@ -66,6 +70,10 @@ heard utterance ──▶ heardWindows ──▶ FalkorDB (exact pass: title / l
 An `:Alias` node is keyed by `(projectId, text)`: identity is per project, so learning can never flip another project's alias from `hint` to `confirmed`.
 
 **Alias kinds are memory strength**: a `hint` (heard once, never confirmed) gates candidate recall but never joins a project's `names`, so the core still reports an honest near match; a `confirmed` alias (the user said "yes, that's what I meant") joins `names` and makes every future session resolve it outright. Learning **refuses** a text that is another project's title or alias — a blurred name is worse than an unlearned one, because every future recall would silently pick one of the two; the route reports the refusal (`learningRefused`) instead of quietly teaching it.
+
+The same schema as the Browser draws it — every label and relationship type in this repo (Labels: 9, Connections: 9):
+
+![The graph schema in FalkorDB Browser: User SAID Utterance, Utterance RESOLVED_TO Project, Utterance TAUGHT Alias, Project LEARNED_ALIAS Alias, Machine OWNS Project, Project HAS Task, Episode ABOUT Project, Heard LAST_MEANT Project](docs/screenshots/schema.png)
 
 Seeded catalog (`pnpm seed`):
 
@@ -133,6 +141,11 @@ All three demos reset the graph to the seed first, so their output is determinis
 3. Session B (fresh call, same words) → `answered_from_memory`, no question asked, path shows the alias and marker `(answered from memory)`.
 4. "Open Portfolio." → asks; answer "laptop" → resolved via `projectChoice`, remembered as `LAST_MEANT`. The next identical ask still asks, and adds "Last time: you meant Portfolio on laptop".
 5. A later route to Rivvl returns the episodes the graph already held — memory read before reasoning.
+
+The Browser after this demo — alias kinds with provenance, and the episodes that accumulate across sessions:
+
+![Alias kinds and provenance: rival (hint, seed) vs zivil (confirmed, taught by an utterance)](docs/screenshots/aliases.png)
+![Episodes ABOUT projects, newest first](docs/screenshots/memory.png)
 
 ## The fixed tool catalogue
 
