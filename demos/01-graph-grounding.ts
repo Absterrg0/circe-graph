@@ -2,17 +2,20 @@
  * Demo 1: grounding a spoken request against a graph, not an array.
  *
  * Same five cases as circe-src demos/01-ground-a-spoken-request.ts, but the
- * candidates come from FalkorDB Cypher and every route prints the MATCH path
- * that justified it. Speech recognition mishears project names, and a voice
- * assistant that guesses will act on the wrong repository. Circe resolves the
- * project slot against the bounded catalog of projects machines actually own,
- * asks instead of guessing when the name is unclear, and never moves work to
- * another machine silently.
+ * candidates come from FalkorDB Cypher, every route prints the MATCH path that
+ * justified it, and each answer states its shape (answered with a path,
+ * needs confirmation, not in the graph, no project named). Speech recognition
+ * mishears project names, and a voice assistant that guesses will act on the
+ * wrong repository. Circe resolves the project slot against the bounded
+ * catalog of projects machines actually own, asks instead of guessing when the
+ * name is unclear, and never moves work to another machine silently.
  *
- * Run: docker compose up -d && pnpm seed && node demos/01-graph-grounding.ts
+ * Run: docker compose up -d && node demos/01-graph-grounding.ts
+ * (The demo resets the graph to the seed first, so its output is deterministic.)
  */
-import { closeGraph, countNodes, graphName, runCypher } from "../src/falkor.ts";
+import { closeGraph, countNodes, getGraph, graphName, runCypher } from "../src/falkor.ts";
 import { routeWithGraph, type GraphRoute } from "../src/route.ts";
+import { seedGraph } from "../src/seedGraph.ts";
 
 const CASES = [
   { title: "exact name", utterance: "start a task in Rivvl to fix the login bug" },
@@ -23,6 +26,7 @@ const CASES = [
 ] as const;
 
 const oneLine = (value: string): string => value.replace(/\s+/gu, " ").trim();
+const shortTs = (ts: string): string => ts.slice(0, 16).replace("T", " ");
 
 /** Params stay readable: long window lists print their head plus a count. */
 function compactParams(params: Readonly<Record<string, unknown>>): string {
@@ -36,6 +40,7 @@ function compactParams(params: Readonly<Record<string, unknown>>): string {
 
 function printRoute(route: GraphRoute): void {
   const turn = route.result;
+  console.log(`Outcome:  ${route.outcome}`);
   switch (turn.status) {
     case "resolved":
       console.log(`Circe:    routes to ${turn.project.title} on ${turn.project.machine.name}`);
@@ -71,6 +76,18 @@ function printRoute(route: GraphRoute): void {
       break;
   }
 
+  if (route.memory.length > 0) {
+    const newest = route.memory[0];
+    if (newest !== undefined) {
+      console.log(
+        `Memory:   the graph already knew ${route.memory.length} note${route.memory.length === 1 ? "" : "s"} — newest: "${newest.text}" (${shortTs(newest.ts)})`,
+      );
+    }
+  }
+  if (route.lastMeant !== undefined) {
+    console.log(`Last time: you meant ${route.lastMeant.label} (${shortTs(route.lastMeant.ts)}) — still asking, never guessing`);
+  }
+
   const { cypherPath } = route;
   console.log(`Cypher:   ${oneLine(cypherPath.query)}`);
   console.log(
@@ -87,16 +104,10 @@ function printRoute(route: GraphRoute): void {
 
 // Fail with instructions instead of a stack trace when the graph is missing.
 try {
-  const totalProjects = Number(
-    (await runCypher<{ total: number }>("MATCH (p:Project) RETURN count(p) AS total"))[0]?.total ?? 0,
-  );
-  if (totalProjects === 0) {
-    console.error('Graph is empty. Run "pnpm seed" first (after "docker compose up -d").');
-    await closeGraph();
-    process.exit(1);
-  }
+  const graph = await getGraph();
+  await seedGraph(graph);
 } catch (error) {
-  console.error("FalkorDB is not reachable. Run: docker compose up -d && pnpm seed");
+  console.error("FalkorDB is not reachable. Run: docker compose up -d");
   console.error(String(error));
   await closeGraph();
   process.exit(1);
@@ -104,8 +115,10 @@ try {
 
 const machines = await countNodes("Machine");
 const projects = await countNodes("Project");
-console.log(`circe-graph demo · graph "${graphName()}" · ${machines} machines · ${projects} projects`);
+const seededEpisodes = await countNodes("Episode");
+console.log(`circe-graph demo · graph "${graphName()}" · ${machines} machines · ${projects} projects · ${seededEpisodes} seeded episodes`);
 console.log("Candidates, aliases, and write-back all live in FalkorDB; fuzzy scoring lives in groundVoiceTurn.");
+console.log("(This demo reset the graph to the seed so the output is deterministic.)");
 
 for (const [index, demoCase] of CASES.entries()) {
   console.log(`\n${index + 1}. ${demoCase.title}`);
@@ -115,8 +128,16 @@ for (const [index, demoCase] of CASES.entries()) {
 
 const utterances = await countNodes("Utterance");
 const episodes = await countNodes("Episode");
+const aliases = await countNodes("Alias");
+const taught = Number(
+  (await runCypher<{ total: number }>("MATCH ()-[:TAUGHT]->(:Alias) RETURN count(*) AS total"))[0]
+    ?.total ?? 0,
+);
 console.log(
   `\nGraph memory now holds ${utterances} utterances and ${episodes} episodes (resolved and clarified turns write back; pending confirmations and non-mentions do not).`,
+);
+console.log(
+  `Aliases: ${aliases} (${taught} with teaching provenance) — confirm a pronunciation in demo 2 and the graph learns it for good.`,
 );
 
 await closeGraph();

@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { getCandidates, heardWindows, lookupCandidates } from "./catalog.ts";
-import { closeGraph, getGraph } from "./falkor.ts";
+import { closeGraph, getGraph, runCypher } from "./falkor.ts";
 import { SEED_IDS, seedGraph } from "./seedGraph.ts";
 
 beforeAll(async () => {
@@ -47,7 +47,7 @@ describe("getCandidates", () => {
     ]);
   });
 
-  it("treats a learned alias as an exact graph match", async () => {
+  it("treats a hint alias as an exact graph match that still reports its strength", async () => {
     const lookup = await lookupCandidates("start a task in rival to fix the login bug");
     expect(lookup.pass).toBe("exact");
     expect(lookup.candidates).toHaveLength(1);
@@ -56,7 +56,11 @@ describe("getCandidates", () => {
       pass: "exact",
       kind: "alias",
       matched: "rival",
+      aliasKind: "hint",
     });
+    // A hint gates recall only; it never joins `names`, so the core still
+    // reports an honest near match instead of pretending it is exact.
+    expect(lookup.candidates[0]?.names).toEqual(["Rivvl"]);
   });
 
   it("keeps both machines' copies of a duplicate title instead of merging them", async () => {
@@ -83,5 +87,28 @@ describe("getCandidates", () => {
     expect(lookup.candidates.every(({ evidence }) => evidence.pass === "catalog-fallback")).toBe(
       true,
     );
+  });
+
+  it("promotes a confirmed alias into the candidate's names", async () => {
+    await runCypher(
+      `MATCH (p:Project {id: '${SEED_IDS.rivvl}'})
+       CREATE (a:Alias {id: 'alias-test-zivil', text: 'zivil', kind: 'confirmed',
+                        ts: '2026-10-15T00:00:00.000Z'})
+       CREATE (p)-[:LEARNED_ALIAS {source: 'confirmation', ts: '2026-10-15T00:00:00.000Z'}]->(a)`,
+    );
+    try {
+      const lookup = await lookupCandidates("I need you to check out Zivil.");
+      expect(lookup.pass).toBe("exact");
+      const rivvl = lookup.candidates.find(({ id }) => id === SEED_IDS.rivvl);
+      expect(rivvl?.names).toEqual(["Rivvl", "zivil"]);
+      expect(rivvl?.evidence).toEqual({
+        pass: "exact",
+        kind: "alias",
+        matched: "zivil",
+        aliasKind: "confirmed",
+      });
+    } finally {
+      await runCypher("MATCH (a:Alias {id: 'alias-test-zivil'}) DETACH DELETE a");
+    }
   });
 });

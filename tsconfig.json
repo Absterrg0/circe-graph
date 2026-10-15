@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.ts", "demos/**/*.ts", "seed.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "demos/**/*.ts", "mcp/**/*.ts", "seed.ts", "vitest.config.ts"]
 }

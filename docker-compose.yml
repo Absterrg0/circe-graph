@@ -1,11 +1,14 @@
 # FalkorDB is the source of truth for circe-graph: candidates, learned
 # aliases, write-back memory. The app never keeps a parallel in-memory catalog.
+# 6379 = database · 3000 = FalkorDB Browser (open http://localhost:3000 to see
+# the graph the agent reasons over — pick graph "circe").
 services:
   falkordb:
     image: falkordb/falkordb:latest
     container_name: circe-graph-falkordb
     ports:
       - "6379:6379"
+      - "3000:3000"
     volumes:
       - falkordb-data:/data
     healthcheck:

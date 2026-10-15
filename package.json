@@ -11,6 +11,9 @@
     "db:down": "docker compose down",
     "seed": "node seed.ts",
     "demo": "node demos/01-graph-grounding.ts",
+    "demo:memory": "node demos/02-memory-across-sessions.ts",
+    "demo:ask": "node demos/03-ask-the-graph.ts",
+    "mcp": "node mcp/server.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

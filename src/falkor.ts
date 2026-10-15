@@ -21,7 +21,13 @@ const DEFAULT_GRAPH = "circe";
 
 /** Graph name is environment-driven so tests can run without touching dev data. */
 export function graphName(): string {
-  return process.env.CIRCE_GRAPH ?? DEFAULT_GRAPH;
+  if (process.env.CIRCE_GRAPH !== undefined && process.env.CIRCE_GRAPH.length > 0) {
+    return process.env.CIRCE_GRAPH;
+  }
+  // Tenant isolation comes free: FalkorDB holds many graphs in one instance,
+  // so a tenant is a graph rather than a WHERE clause anyone can forget.
+  const tenant = process.env.CIRCE_TENANT;
+  return tenant === undefined || tenant.length === 0 ? DEFAULT_GRAPH : `${DEFAULT_GRAPH}:${tenant}`;
 }
 
 let client: FalkorDB | undefined;
@@ -68,8 +74,21 @@ export async function runCypher<T extends object = GraphRow>(
   return reply.data ?? [];
 }
 
+/**
+ * Read path: every query that does not deliberately write goes through
+ * FalkorDB's read-only API, so a bug in a tool cannot mutate the graph.
+ */
+export async function runRead<T extends object = GraphRow>(
+  cypher: string,
+  params: CypherParams = {},
+): Promise<ReadonlyArray<T>> {
+  const selected = await getGraph();
+  const reply = await selected.roQuery<T>(cypher, { params });
+  return reply.data ?? [];
+}
+
 /** Count helper for scripts and tests. */
 export async function countNodes(label: string): Promise<number> {
-  const rows = await runCypher<{ total: number }>(`MATCH (n:${label}) RETURN count(n) AS total`);
+  const rows = await runRead<{ total: number }>(`MATCH (n:${label}) RETURN count(n) AS total`);
   return Number(rows[0]?.total ?? 0);
 }
