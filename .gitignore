@@ -1,3 +1,8 @@
 node_modules/
 *.log
 .DS_Store
+
+# Local environment — never commit real endpoints or credentials
+.env
+.env.*
+!.env.example

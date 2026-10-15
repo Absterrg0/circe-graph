@@ -4,11 +4,14 @@
 # the graph the agent reasons over — pick graph "circe").
 services:
   falkordb:
-    image: falkordb/falkordb:latest
+    # Pinned by digest: ":latest" could change Cypher behaviour mid-event.
+    image: falkordb/falkordb@sha256:107455e862a824e45e8e9f5a7fbfdf5e00a08b14e13eae2577c72fd9e3f59ba6
     container_name: circe-graph-falkordb
+    restart: unless-stopped
     ports:
-      - "6379:6379"
-      - "3000:3000"
+      # Loopback only — this database is local storage, not a public service.
+      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:3000:3000"
     volumes:
       - falkordb-data:/data
     healthcheck:

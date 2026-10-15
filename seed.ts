@@ -8,8 +8,14 @@
 import { closeGraph, countNodes, getGraph, graphName } from "./src/falkor.ts";
 import { seedGraph } from "./src/seedGraph.ts";
 
-const graph = await getGraph();
-await seedGraph(graph);
+try {
+  await seedGraph(await getGraph());
+} catch (error) {
+  console.error("FalkorDB is not reachable. Run: docker compose up -d");
+  console.error(String(error));
+  await closeGraph();
+  process.exit(1);
+}
 
 const counts = await Promise.all(
   ["User", "Machine", "Project", "Task", "Alias", "Utterance", "Episode"].map(async (label) => [
