@@ -6,7 +6,7 @@ Eligibility clarification is pending: the first FalkorDB prototype predates the 
 
 Say "Open Zivil." The router asks "Did you mean Rivvl?" Confirm once, restart the server, and the same request resolves from a confirmed alias in the graph. Every answer includes the path and query behind it. Two projects called Portfolio remain separate, with a machine-qualified clarification instead of a guess.
 
-[Watch the final 1:58 captioned demo](docs/final-demo.mp4), built around a fresh, continuous live coding-agent capture. The [video evidence](docs/evidence/final-video.md) links the raw recording, model logs and actual MCP traffic, and explains the added titles and captions. A real Codex agent chooses the tools, a user confirmation teaches the graph, and a fresh agent process recalls the alias. User inputs are a predefined synthetic scenario; tool calls and model responses are generated live.
+[Watch the final 1:58 captioned demo on YouTube](https://youtu.be/JK3wnJ07rgs), built around a fresh, continuous live coding-agent capture. The [original MP4](docs/final-demo.mp4) and [video evidence](docs/evidence/final-video.md) include the raw recording, model logs and actual MCP traffic, and explain the added titles and captions. A real Codex agent chooses the tools, a user confirmation teaches the graph, and a fresh agent process recalls the alias. User inputs are a predefined synthetic scenario; tool calls and model responses are generated live.
 
 The [earlier unedited agent recording](docs/agent-demo.mp4) is also available, with [its run summary](docs/evidence/agent-demo.json) and [MCP traffic](docs/evidence/agent-demo-mcp.jsonl).
 

@@ -28,7 +28,7 @@ The model selects from seven fixed tools. The service executes reviewed, paramet
 
 ## Demonstration and setup
 
-The [final 1:58 captioned demo](../final-demo.mp4) includes a fresh, continuous agent run. Its [evidence notes](../evidence/final-video.md) identify the source recording, raw model and MCP logs, verification, and editing.
+The [final 1:58 captioned demo on YouTube](https://youtu.be/JK3wnJ07rgs) includes a fresh, continuous agent run. The [original MP4](../final-demo.mp4) is also available. Its [evidence notes](../evidence/final-video.md) identify the source recording, raw model and MCP logs, verification, and editing.
 
 The README provides local setup using Node 24, pnpm, and Docker. No public deployment is required to run the service. The deterministic conversation demo requires no model API key. The optional Codex integration demo uses a separately authenticated local Codex CLI and real model-selected tool calls.
 
