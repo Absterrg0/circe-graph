@@ -1,0 +1,40 @@
+{
+  "recordedAt": "2026-10-17T10:04:45.716Z",
+  "requestedModel": null,
+  "host": "Codex CLI",
+  "graph": "circe_agent_demo",
+  "syntheticUserInputs": true,
+  "actualModelAndMcpCalls": true,
+  "sessions": [
+    {
+      "stage": "ask",
+      "agentPid": 3491243,
+      "answer": "I’ll check Circe’s route for “Open Zivil.”\n\n\nCirce needs confirmation: did you mean **Rivvl** on the connected **desktop** machine? No route has been selected yet.",
+      "threadId": "01a14951-5ed4-7591-b221-a8ef2a7e9f39"
+    },
+    {
+      "stage": "confirm",
+      "agentPid": 3492525,
+      "answer": "I’ll re-check “Open Zivil.” with Circe and use the offered ID to record your confirmation of Rivvl.\n\nRecorded your confirmation: “Zivil” means Rivvl. Circe routed “Open Zivil.” to Rivvl on the connected desktop, supported by the graph path `desktop → OWNS → Rivvl`.",
+      "threadId": "01a14951-9bbd-71f0-b555-22deaf6f1962"
+    },
+    {
+      "stage": "recall",
+      "agentPid": 3494016,
+      "answer": "I’ll ask Circe to select the project matching “Zivil.”\n\n\nRouted to **Rivvl** on **desktop** (connected). Circe matched “Zivil” to a previously confirmed pronunciation alias.",
+      "threadId": "01a14951-d654-7eb3-bb28-79bd5d167e56"
+    },
+    {
+      "stage": "connected",
+      "agentPid": 3495246,
+      "answer": "I’ll check Circe’s graph for work affected by build-box being offline and evidence of a copy on another machine. I won’t move any work.\n\nCirce’s graph identifies **Portfolio** as affected, including the queued task **“refresh the portfolio theme.”**\n\nEvidence:\n- `build-box → OWNS → Portfolio`\n- `Portfolio → HAS → refresh the portfolio theme` (`queued`)\n- `laptop → OWNS → Portfolio`, reported as a mirror with `connected: true`.\n\nAn available copy is therefore recorded on **laptop**. The graph does not establish whether its files are up to date. No work was moved.",
+      "threadId": "01a14952-025d-7642-95f4-523b603a7dc1"
+    }
+  ],
+  "checks": [
+    "confirmation required before learning",
+    "alias learned from explicit confirmation",
+    "fresh agent and server recall from graph",
+    "offline-machine traversal reports task and connected copy"
+  ]
+}

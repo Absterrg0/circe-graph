@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #101318;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #101318;
+        color: #e6eaf0;
+        font-family: Montserrat, sans-serif;
+      }
+      .mono {
+        font-family: "JetBrains Mono", monospace;
+      }
+      .mint {
+        color: #78e2b4;
+      }
+      .scene {
+        position: absolute;
+        inset: 0;
+      }
+      .glow {
+        position: absolute;
+        width: 1400px;
+        height: 1400px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(120, 226, 180, 0.16) 0%, rgba(120, 226, 180, 0) 62%);
+      }
+      .kicker {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 24px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #78e2b4;
+      }
+      .rule {
+        height: 3px;
+        background: #78e2b4;
+        transform-origin: left center;
+      }
+
+      /* Scene 1: title */
+      #s1 .wrap {
+        position: absolute;
+        left: 140px;
+        top: 250px;
+        width: 1500px;
+      }
+      #s1 h1 {
+        font-size: 150px;
+        font-weight: 900;
+        letter-spacing: -0.04em;
+        line-height: 1;
+        margin-top: 28px;
+      }
+      #s1 .sub {
+        font-size: 46px;
+        font-weight: 700;
+        margin-top: 34px;
+        line-height: 1.25;
+        width: 1300px;
+      }
+      #s1 .rule {
+        width: 520px;
+        margin-top: 46px;
+      }
+      #s1 .meta {
+        font-size: 26px;
+        color: #abb5c5;
+        margin-top: 30px;
+      }
+      #s1 .ghost {
+        position: absolute;
+        right: -60px;
+        bottom: -90px;
+        font-size: 380px;
+        font-weight: 900;
+        color: rgba(120, 226, 180, 0.07);
+        letter-spacing: -0.05em;
+        white-space: nowrap;
+      }
+
+      /* Scene 2: model */
+      #s2 .left {
+        position: absolute;
+        left: 110px;
+        top: 130px;
+        width: 700px;
+      }
+      #s2 h2 {
+        font-size: 64px;
+        font-weight: 900;
+        line-height: 1.08;
+        letter-spacing: -0.02em;
+        margin-top: 22px;
+      }
+      #s2 p {
+        font-size: 30px;
+        line-height: 1.45;
+        color: #c9d1dd;
+        margin-top: 30px;
+      }
+      #s2 p b {
+        color: #e6eaf0;
+      }
+      #s2 .diagram {
+        position: absolute;
+        left: 860px;
+        top: 150px;
+        width: 980px;
+        height: 800px;
+      }
+      .node {
+        position: absolute;
+        width: 260px;
+        height: 112px;
+        border: 3px solid #3a4656;
+        border-radius: 14px;
+        background: #161b23;
+        padding: 14px 18px;
+      }
+      .node .t {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 18px;
+        color: #8d97a8;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .node .n {
+        font-size: 28px;
+        font-weight: 700;
+        margin-top: 6px;
+        line-height: 1.15;
+      }
+      .node.task .n {
+        font-size: 22px;
+      }
+      .node.off {
+        border-color: #f7d48c;
+      }
+      .node.off .t {
+        color: #f7d48c;
+      }
+      .node.alias {
+        border: 3px dashed #78e2b4;
+        background: #12241e;
+      }
+      .node.alias .t {
+        color: #78e2b4;
+      }
+      .edge {
+        position: absolute;
+        height: 3px;
+        background: #6b7787;
+        transform-origin: left center;
+      }
+      .edge.learn {
+        background: #78e2b4;
+      }
+      .elabel {
+        position: absolute;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 17px;
+        color: #abb5c5;
+        width: 100px;
+        text-align: center;
+      }
+      .elabel.learn {
+        color: #78e2b4;
+      }
+      #s2 .dnote {
+        position: absolute;
+        left: 0;
+        top: 720px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 20px;
+        color: #8d97a8;
+      }
+
+      /* Scene 3: live capture */
+      #capture {
+        position: absolute;
+        left: -212px;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+      }
+      #rail {
+        position: absolute;
+        left: 1500px;
+        top: 0;
+        width: 420px;
+        height: 1080px;
+        background: #0b0e13;
+        border-left: 3px solid #78e2b4;
+        padding: 40px 34px;
+      }
+      .live {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 22px;
+        font-weight: 700;
+        color: #78e2b4;
+        letter-spacing: 0.1em;
+      }
+      .dot {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #ff8a8a;
+      }
+      .livemeta {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 18px;
+        color: #abb5c5;
+        line-height: 1.5;
+        margin-top: 12px;
+      }
+      .steps {
+        display: flex;
+        gap: 10px;
+        margin-top: 34px;
+      }
+      .step {
+        flex: 1;
+        height: 54px;
+        border-radius: 8px;
+        border: 2px solid #2c3440;
+        color: #6b7787;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 24px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #101318;
+      }
+      .progress {
+        margin-top: 16px;
+        height: 6px;
+        background: #1d232d;
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      .progress i {
+        display: block;
+        height: 100%;
+        width: 100%;
+        background: #78e2b4;
+        transform-origin: left center;
+      }
+      .card {
+        position: absolute;
+        left: 1534px;
+        top: 300px;
+        width: 352px;
+      }
+      .card .k {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 20px;
+        color: #f7d48c;
+        letter-spacing: 0.08em;
+      }
+      .card h3 {
+        font-size: 36px;
+        font-weight: 900;
+        line-height: 1.12;
+        margin-top: 12px;
+        letter-spacing: -0.01em;
+      }
+      .card p {
+        font-size: 23px;
+        line-height: 1.45;
+        color: #c9d1dd;
+        margin-top: 20px;
+      }
+      .chip {
+        display: inline-block;
+        margin-top: 24px;
+        padding: 10px 14px;
+        border-radius: 8px;
+        background: #12241e;
+        border: 2px solid #78e2b4;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 20px;
+        color: #78e2b4;
+      }
+      .chip.warn {
+        background: #2a2416;
+        border-color: #f7d48c;
+        color: #f7d48c;
+      }
+      .railfoot {
+        position: absolute;
+        left: 1534px;
+        top: 960px;
+        width: 352px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 17px;
+        line-height: 1.5;
+        color: #8d97a8;
+      }
+
+      /* Scene 4: proof */
+      #s4 .head {
+        position: absolute;
+        left: 110px;
+        top: 100px;
+        width: 1700px;
+      }
+      #s4 h2 {
+        font-size: 64px;
+        font-weight: 900;
+        letter-spacing: -0.02em;
+        margin-top: 18px;
+      }
+      #s4 .term {
+        position: absolute;
+        left: 110px;
+        top: 330px;
+        width: 1060px;
+        background: #090c10;
+        border: 2px solid #2c3440;
+        border-radius: 16px;
+        padding: 34px 38px;
+      }
+      #s4 .cmd {
+        font-size: 22px;
+        line-height: 1.5;
+        color: #c8b0ff;
+      }
+      #s4 table {
+        margin-top: 30px;
+        border-collapse: collapse;
+        width: 100%;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 28px;
+      }
+      #s4 th {
+        text-align: left;
+        color: #8d97a8;
+        font-weight: 400;
+        font-size: 22px;
+        padding: 10px 12px;
+        border-bottom: 2px solid #2c3440;
+      }
+      #s4 td {
+        padding: 16px 12px;
+        color: #c9d1dd;
+      }
+      #s4 tr.hit td {
+        color: #78e2b4;
+        background: #12241e;
+      }
+      #s4 .tnote {
+        margin-top: 26px;
+        font-size: 19px;
+        color: #8d97a8;
+        line-height: 1.5;
+      }
+      #s4 .stats {
+        position: absolute;
+        left: 1250px;
+        top: 330px;
+        width: 580px;
+      }
+      .stat {
+        border-top: 3px solid #2c3440;
+        padding: 18px 0 22px;
+      }
+      .stat .v {
+        font-size: 60px;
+        font-weight: 900;
+        color: #78e2b4;
+        line-height: 1;
+      }
+      .stat .l {
+        font-size: 24px;
+        color: #c9d1dd;
+        margin-top: 10px;
+        line-height: 1.35;
+      }
+
+      /* Scene 5: honest notes */
+      #s5 .wrap {
+        position: absolute;
+        left: 110px;
+        top: 110px;
+        width: 1700px;
+      }
+      #s5 h2 {
+        font-size: 64px;
+        font-weight: 900;
+        letter-spacing: -0.02em;
+        margin-top: 18px;
+      }
+      #s5 ul {
+        list-style: none;
+        margin-top: 44px;
+      }
+      #s5 li {
+        display: flex;
+        gap: 28px;
+        align-items: baseline;
+        font-size: 31px;
+        line-height: 1.4;
+        color: #c9d1dd;
+        padding: 18px 0;
+        border-top: 2px solid #232a35;
+      }
+      #s5 li .tag {
+        flex: 0 0 280px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 22px;
+        color: #f7d48c;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      #s5 li b {
+        color: #e6eaf0;
+      }
+
+      /* Scene 6: end */
+      #s6 .wrap {
+        position: absolute;
+        left: 140px;
+        top: 270px;
+        width: 1640px;
+      }
+      #s6 h1 {
+        font-size: 120px;
+        font-weight: 900;
+        letter-spacing: -0.04em;
+        line-height: 1;
+        margin-top: 24px;
+      }
+      #s6 .url {
+        font-size: 44px;
+        margin-top: 40px;
+        color: #78e2b4;
+      }
+      #s6 .rule {
+        width: 520px;
+        margin-top: 46px;
+      }
+      #s6 .rep {
+        font-size: 28px;
+        color: #c9d1dd;
+        margin-top: 36px;
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="118"
+      data-width="1920"
+      data-height="1080"
+    >
+      <!-- Scene 1: title -->
+      <section id="s1" class="scene clip" data-start="0" data-duration="7" data-track-index="1">
+        <div id="s1-glow" class="glow" style="left: 700px; top: -500px"></div>
+        <div class="ghost" aria-hidden="true">graph</div>
+        <div class="wrap">
+          <div id="s1-k" class="kicker">Graph Hacks · Track 2 · Agent memory</div>
+          <h1 id="s1-h">circe<span class="mint">-graph</span></h1>
+          <div id="s1-sub" class="sub">
+            Project memory for coding agents, stored in FalkorDB and used through MCP.
+          </div>
+          <div id="s1-rule" class="rule"></div>
+          <div id="s1-meta" class="meta mono">
+            Working demo · fresh live capture recorded October 17, 2026
+          </div>
+        </div>
+      </section>
+
+      <!-- Scene 2: the problem and the graph -->
+      <section id="s2" class="scene clip" data-start="7" data-duration="13" data-track-index="1">
+        <div id="s2-glow" class="glow" style="left: 900px; top: -200px"></div>
+        <div class="left">
+          <div id="s2-k" class="kicker">The problem</div>
+          <h2 id="s2-h">“Open Zivil.” There is no project called Zivil.</h2>
+          <p id="s2-p1">
+            Voice input mishears names. An agent that guesses can route work to the wrong
+            project; one that never learns asks forever.
+          </p>
+          <p id="s2-p2">
+            <b>circe-graph</b> keeps machines, projects, tasks and
+            <b>user-confirmed aliases</b> as a graph. Agents ask first, learn only on
+            confirmation, and answer with the graph path.
+          </p>
+        </div>
+        <div class="diagram">
+          <!-- row 1 -->
+          <div class="node n1" style="left: 0; top: 40px">
+            <div class="t">Machine</div>
+            <div class="n">desktop</div>
+          </div>
+          <div class="edge e1" style="left: 260px; top: 96px; width: 100px"></div>
+          <div class="elabel e1l" style="left: 260px; top: 64px">OWNS →</div>
+          <div class="node n1" style="left: 360px; top: 40px">
+            <div class="t">Project</div>
+            <div class="n">Rivvl</div>
+          </div>
+          <div class="edge learn e2" style="left: 620px; top: 96px; width: 100px"></div>
+          <div class="elabel learn e2l" style="left: 620px; top: 44px; width: 100px; font-size: 15px; line-height: 1.2">LEARNED_ ALIAS →</div>
+          <div class="node alias n2" style="left: 720px; top: 40px">
+            <div class="t">Alias · confirmed</div>
+            <div class="n">“zivil”</div>
+          </div>
+          <!-- row 2 -->
+          <div class="node off n3" style="left: 0; top: 300px">
+            <div class="t">Machine · offline</div>
+            <div class="n">build-box</div>
+          </div>
+          <div class="edge e3" style="left: 260px; top: 356px; width: 100px"></div>
+          <div class="elabel e3l" style="left: 260px; top: 324px">OWNS →</div>
+          <div class="node n3" style="left: 360px; top: 300px">
+            <div class="t">Project</div>
+            <div class="n">Portfolio</div>
+          </div>
+          <div class="edge e3" style="left: 620px; top: 356px; width: 100px"></div>
+          <div class="elabel e3l" style="left: 620px; top: 324px">HAS →</div>
+          <div class="node task n3" style="left: 720px; top: 300px">
+            <div class="t">Task · queued</div>
+            <div class="n">refresh the portfolio theme</div>
+          </div>
+          <!-- row 3 -->
+          <div class="node n4" style="left: 0; top: 520px">
+            <div class="t">Machine</div>
+            <div class="n">laptop</div>
+          </div>
+          <div class="edge e4" style="left: 260px; top: 576px; width: 100px"></div>
+          <div class="elabel e4l" style="left: 260px; top: 544px">OWNS →</div>
+          <div class="node n4" style="left: 360px; top: 520px">
+            <div class="t">Project · copy</div>
+            <div class="n">Portfolio</div>
+          </div>
+          <div id="s2-note" class="dnote">
+            Synthetic seeded demo graph. The dashed alias does not exist until the user confirms.
+          </div>
+        </div>
+      </section>
+
+      <!-- Scene 3: unedited live capture, played once at 1x from its first frame -->
+      <video
+        id="capture"
+        class="clip"
+        src="assets/capture.webm"
+        muted
+        playsinline
+        data-start="20"
+        data-duration="61.8"
+        data-media-start="0"
+        data-track-index="0"
+      ></video>
+      <div id="rail" class="clip" data-start="20" data-duration="61.8" data-track-index="2">
+        <div class="live"><span id="rail-dot" class="dot"></span>LIVE CAPTURE</div>
+        <div class="livemeta">
+          <div>Real time · one take · no cuts</div><div>Codex CLI → MCP → FalkorDB</div>
+        </div>
+        <div class="steps">
+          <div id="st1" class="step">1</div>
+          <div id="st2" class="step">2</div>
+          <div id="st3" class="step">3</div>
+          <div id="st4" class="step">4</div>
+        </div>
+        <div class="progress"><i id="rail-bar"></i></div>
+      </div>
+
+      <div id="c0" class="card clip" data-start="20" data-duration="2.5" data-track-index="3">
+        <div class="k">START</div>
+        <h3>One click starts a real, paid agent run.</h3>
+        <p>Every line on the left streams from the running CLI and the MCP audit proxy.</p>
+      </div>
+      <div id="c1" class="card clip" data-start="22.5" data-duration="15.8" data-track-index="3">
+        <div class="k">STAGE 1 · ASK FIRST</div>
+        <h3>An unfamiliar name gets a question, not a guess.</h3>
+        <p>
+          Codex calls <span class="mono">route_request</span>. Circe finds Rivvl as a near match
+          but stores nothing yet.
+        </p>
+        <div class="chip warn">needs_confirmation</div>
+      </div>
+      <div id="c2" class="card clip" data-start="38.3" data-duration="15" data-track-index="3">
+        <div class="k">STAGE 2 · LEARN</div>
+        <h3>The user confirms. The graph learns.</h3>
+        <p>
+          Codex calls <span class="mono">confirm_route</span> with the offered project id. Circe
+          writes the alias “zivil” → Rivvl.
+        </p>
+        <div class="chip">answered_with_path</div>
+      </div>
+      <div id="c3" class="card clip" data-start="53.3" data-duration="11.3" data-track-index="3">
+        <div class="k">STAGE 3 · RECALL</div>
+        <h3>A brand-new agent remembers.</h3>
+        <p>
+          New Codex process, new MCP server PID. Same words, now resolved straight from graph
+          memory.
+        </p>
+        <div class="chip">answered_from_memory</div>
+      </div>
+      <div id="c4" class="card clip" data-start="64.6" data-duration="12" data-track-index="3">
+        <div class="k">STAGE 4 · TRAVERSE</div>
+        <h3>build-box is offline. What breaks?</h3>
+        <p>
+          <span class="mono">machine_blast_radius</span> walks machine → project → queued task and
+          finds the copy on laptop. Nothing is moved.
+        </p>
+        <div class="chip">answered_with_path</div>
+      </div>
+      <div id="c5" class="card clip" data-start="76.6" data-duration="5.2" data-track-index="3">
+        <div class="k">RESULT</div>
+        <h3>PASS: 4 of 4 checks.</h3>
+        <p>
+          Assertions run on the saved MCP audit: ask first, learn on confirmation, fresh recall,
+          traversal.
+        </p>
+      </div>
+      <div
+        id="railfoot"
+        class="railfoot clip"
+        data-start="20"
+        data-duration="61.8"
+        data-track-index="4"
+      >
+        Captions added in editing. The screen recording is shifted left, otherwise unaltered.
+      </div>
+
+      <!-- Scene 4: graph proof -->
+      <section id="s4" class="scene clip" data-start="81.8" data-duration="14.2" data-track-index="1">
+        <div id="s4-glow" class="glow" style="left: -300px; top: 200px"></div>
+        <div class="head">
+          <div id="s4-k" class="kicker">After the run · same graph</div>
+          <h2 id="s4-h">The confirmation is now a FalkorDB edge.</h2>
+        </div>
+        <div id="s4-term" class="term">
+          <div class="cmd mono">
+            GRAPH.QUERY circe_agent_demo "MATCH (p:Project)-[r:LEARNED_ALIAS]-&gt;(a:Alias)
+            RETURN p.title, a.text, a.kind, r.source"
+          </div>
+          <table>
+            <tr>
+              <th>p.title</th>
+              <th>a.text</th>
+              <th>a.kind</th>
+              <th>r.source</th>
+            </tr>
+            <tr id="s4-r1">
+              <td>Rivvl</td>
+              <td>rival</td>
+              <td>hint</td>
+              <td>seed</td>
+            </tr>
+            <tr id="s4-r2" class="hit">
+              <td>Rivvl</td>
+              <td>zivil</td>
+              <td>confirmed</td>
+              <td>confirmation</td>
+            </tr>
+          </table>
+          <div class="tnote mono">
+            Query run with redis-cli right after the capture. Values verbatim, laid out as a
+            table. “rival” is a seeded hint; “zivil” was written by the agent's confirm_route call.
+          </div>
+        </div>
+        <div class="stats">
+          <div class="stat s4s">
+            <div class="v">4 + 4</div>
+            <div class="l">fresh Codex CLI processes and MCP server processes, each with its own PID</div>
+          </div>
+          <div class="stat s4s">
+            <div class="v">5</div>
+            <div class="l">MCP tool calls chosen by the model, each logged by a transparent audit proxy</div>
+          </div>
+          <div class="stat s4s">
+            <div class="v">4 / 4</div>
+            <div class="l">assertions passed on the saved audit and graph</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Scene 5: honest notes -->
+      <section id="s5" class="scene clip" data-start="96" data-duration="14" data-track-index="1">
+        <div class="wrap">
+          <div id="s5-k" class="kicker">What is real, what is not</div>
+          <h2 id="s5-h">Read this before judging.</h2>
+          <ul>
+            <li class="s5i">
+              <span class="tag">Real</span
+              ><span
+                >Codex CLI model output, the MCP tool calls it chose, FalkorDB responses and
+                writes, process IDs. <b>One continuous capture at 1× speed.</b></span
+              >
+            </li>
+            <li class="s5i">
+              <span class="tag">Synthetic</span
+              ><span
+                >The machines, projects and tasks are <b>seeded demo data</b>, not live
+                computers. The user's turns are <b>predefined</b>.</span
+              >
+            </li>
+            <li class="s5i">
+              <span class="tag">Scope</span
+              ><span
+                >Routing <b>selects a project</b>. It does not open a workspace or execute
+                coding tasks. Shell and delegation were disabled; sandbox read-only.</span
+              >
+            </li>
+            <li class="s5i">
+              <span class="tag">Edited</span
+              ><span
+                >Title cards, the diagram, captions and the typeset query result were added in
+                editing. Raw capture and logs are in the repository.</span
+              >
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Scene 6: end card -->
+      <section id="s6" class="scene clip" data-start="110" data-duration="8" data-track-index="1">
+        <div id="s6-glow" class="glow" style="left: 800px; top: -300px"></div>
+        <div class="wrap">
+          <div id="s6-k" class="kicker">Open source · reproducible</div>
+          <h1 id="s6-h">circe<span class="mint">-graph</span></h1>
+          <div id="s6-url" class="url mono">github.com/Absterrg0/circe-graph</div>
+          <div id="s6-rule" class="rule"></div>
+          <div id="s6-rep" class="rep">
+            <span class="mono">pnpm db:up &amp;&amp; pnpm demo:record</span> reruns this exact demo
+            with your own signed-in Codex CLI.
+          </div>
+        </div>
+      </section>
+    </div>
+    <script>
+      const tl = gsap.timeline({ paused: true });
+
+      // Scene 1
+      tl.fromTo("#s1-glow", { scale: 0.85, opacity: 0.6 }, { scale: 1.08, opacity: 1, duration: 7, ease: "sine.inOut" }, 0);
+      tl.fromTo("#s1-k", { y: 24, opacity: 0 }, { y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }, 0.3);
+      tl.fromTo("#s1-h", { y: 70, opacity: 0 }, { y: 0, opacity: 1, duration: 0.8, ease: "expo.out" }, 0.5);
+      tl.fromTo("#s1-sub", { x: -40, opacity: 0 }, { x: 0, opacity: 1, duration: 0.6, ease: "power3.out" }, 1.1);
+      tl.fromTo("#s1-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.7, ease: "power4.inOut" }, 1.5);
+      tl.fromTo("#s1-meta", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "none" }, 1.9);
+      tl.fromTo("#s1 .ghost", { x: 60 }, { x: -60, duration: 7, ease: "none" }, 0);
+      tl.to("#s1 .wrap", { opacity: 0, y: -30, duration: 0.4, ease: "power2.in" }, 6.55);
+
+      // Scene 2 (starts at 7)
+      tl.fromTo("#s2-glow", { scale: 0.9 }, { scale: 1.1, duration: 13, ease: "sine.inOut" }, 7);
+      tl.fromTo("#s2-k", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 7.2);
+      tl.fromTo("#s2-h", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.7, ease: "expo.out" }, 7.35);
+      tl.fromTo("#s2-p1", { opacity: 0 }, { opacity: 1, duration: 0.6, ease: "none" }, 8.4);
+      tl.fromTo("#s2-p2", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.6, ease: "power3.out" }, 10.2);
+      [".n1", ".n3", ".n4"].forEach((sel, i) => {
+        tl.fromTo(`#s2 ${sel}`, { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.5, stagger: 0.18, ease: "back.out(1.6)" }, 8.6 + i * 0.9);
+      });
+      [".e1", ".e3", ".e4"].forEach((sel, i) => {
+        tl.fromTo(`#s2 ${sel}`, { scaleX: 0 }, { scaleX: 1, duration: 0.4, stagger: 0.15, ease: "power2.out" }, 9.0 + i * 0.9);
+        tl.fromTo(`#s2 ${sel}l`, { opacity: 0 }, { opacity: 1, duration: 0.3, stagger: 0.15, ease: "none" }, 9.2 + i * 0.9);
+      });
+      tl.fromTo("#s2 .e2", { scaleX: 0 }, { scaleX: 1, duration: 0.6, ease: "power3.inOut" }, 13.2);
+      tl.fromTo("#s2 .e2l", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "none" }, 13.5);
+      tl.fromTo("#s2 .n2", { opacity: 0, scale: 0.8 }, { opacity: 1, scale: 1, duration: 0.6, ease: "elastic.out(1, 0.6)" }, 13.6);
+      tl.fromTo("#s2-note", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "none" }, 14.2);
+      tl.to("#s2 .left, #s2 .diagram", { opacity: 0, duration: 0.4, ease: "power2.in" }, 19.55);
+
+      // Scene 3 (live capture 20 → 81.8). Rail chrome and stage cards.
+      tl.fromTo("#rail", { x: 420 }, { x: 0, duration: 0.5, ease: "power3.out" }, 20);
+      tl.fromTo("#rail-bar", { scaleX: 0 }, { scaleX: 1, duration: 61.8, ease: "none" }, 20);
+      tl.fromTo("#rail-dot", { opacity: 1 }, { opacity: 0.25, duration: 0.8, ease: "sine.inOut", repeat: 75, yoyo: true }, 20);
+      const stageStarts = [22.5, 38.3, 53.3, 64.6];
+      stageStarts.forEach((t, i) => {
+        tl.set(`#st${i + 1}`, { backgroundColor: "#f7d48c", color: "#101318", borderColor: "#f7d48c" }, t);
+        if (i > 0) tl.set(`#st${i}`, { backgroundColor: "#12241e", color: "#78e2b4", borderColor: "#78e2b4" }, t);
+      });
+      tl.set("#st4", { backgroundColor: "#12241e", color: "#78e2b4", borderColor: "#78e2b4" }, 76.6);
+      [["#c0", 20], ["#c1", 22.5], ["#c2", 38.3], ["#c3", 53.3], ["#c4", 64.6], ["#c5", 76.6]].forEach(([id, t]) => {
+        tl.fromTo(`${id} .k`, { opacity: 0, x: 20 }, { opacity: 1, x: 0, duration: 0.35, ease: "power2.out" }, t + 0.05);
+        tl.fromTo(`${id} h3`, { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.5, ease: "expo.out" }, t + 0.15);
+        tl.fromTo(`${id} p`, { opacity: 0 }, { opacity: 1, duration: 0.45, ease: "none" }, t + 0.45);
+      });
+      [["#c1", 22.5], ["#c2", 38.3], ["#c3", 53.3], ["#c4", 64.6]].forEach(([id, t]) => {
+        tl.fromTo(`${id} .chip`, { opacity: 0, scale: 0.85 }, { opacity: 1, scale: 1, duration: 0.4, ease: "back.out(2)" }, t + 0.8);
+      });
+
+      // Scene 4 (81.8)
+      tl.fromTo("#s4-glow", { scale: 0.9 }, { scale: 1.1, duration: 14.2, ease: "sine.inOut" }, 81.8);
+      tl.fromTo("#s4-k", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 82.0);
+      tl.fromTo("#s4-h", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.7, ease: "expo.out" }, 82.15);
+      tl.fromTo("#s4-term", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, 82.8);
+      tl.fromTo("#s4-r1", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "none" }, 83.6);
+      tl.fromTo("#s4-r2", { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: 0.5, ease: "power2.out" }, 84.2);
+      tl.fromTo("#s4 .s4s", { opacity: 0, x: 40 }, { opacity: 1, x: 0, duration: 0.5, stagger: 0.6, ease: "power3.out" }, 86.0);
+      tl.to("#s4 .head, #s4-term, #s4 .stats", { opacity: 0, duration: 0.4, ease: "power2.in" }, 95.55);
+
+      // Scene 5 (96)
+      tl.fromTo("#s5-k", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 96.2);
+      tl.fromTo("#s5-h", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.7, ease: "expo.out" }, 96.35);
+      tl.fromTo("#s5 .s5i", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.5, stagger: 0.7, ease: "power3.out" }, 97.2);
+      tl.to("#s5 .wrap", { opacity: 0, duration: 0.4, ease: "power2.in" }, 109.55);
+
+      // Scene 6 (110)
+      tl.fromTo("#s6-glow", { scale: 0.9 }, { scale: 1.08, duration: 8, ease: "sine.inOut" }, 110);
+      tl.fromTo("#s6-k", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 110.2);
+      tl.fromTo("#s6-h", { opacity: 0, y: 60 }, { opacity: 1, y: 0, duration: 0.8, ease: "expo.out" }, 110.35);
+      tl.fromTo("#s6-url", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "none" }, 111.0);
+      tl.fromTo("#s6-rule", { scaleX: 0 }, { scaleX: 1, duration: 0.7, ease: "power4.inOut" }, 111.3);
+      tl.fromTo("#s6-rep", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 111.8);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

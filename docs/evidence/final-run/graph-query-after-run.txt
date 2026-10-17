@@ -1,0 +1,15 @@
+p.title
+a.text
+a.kind
+r.source
+Rivvl
+rival
+hint
+seed
+Rivvl
+zivil
+confirmed
+confirmation
+Cached execution: 1
+Query internal execution time: 0.104904 milliseconds
+Graph version: 124
