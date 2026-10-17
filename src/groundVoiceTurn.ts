@@ -60,7 +60,7 @@ type ProjectMention = {
  * A candidate span touching one of these is skipped, so "checkout zivil" or
  * "the Rivvl branch" never fuzzy-match a project the user did not name.
  */
-const TASK_DOMAIN_TOKENS: ReadonlySet<string> = new Set([
+export const TASK_DOMAIN_TOKENS: ReadonlySet<string> = new Set([
   "branch",
   "tag",
   "commit",
@@ -141,9 +141,9 @@ function trailingPrepSlot(utterance: string): ProjectSlot | undefined {
  * verb or a trailing prepositional phrase. Anything else — "fix auth",
  * "what is the weather today" — has no slot and never routes.
  */
-function locateSlot(
+export function locateProjectSlot(
   utterance: string,
-  mode: "explicit-only" | "explicit-or-inferred",
+  mode: "explicit-only" | "explicit-or-inferred" = "explicit-or-inferred",
 ): ProjectSlot | undefined {
   const explicit = explicitSuffixMention(utterance) ?? explicitPrefixMention(utterance);
   if (explicit !== undefined) return { start: explicit.start, end: explicit.end, explicit: true };
@@ -489,7 +489,7 @@ export function groundVoiceTurn<Project>(input: {
     return bestByCandidate;
   };
   const ranked: RankedHit[] = [];
-  const slot = locateSlot(sourceUtterance, input.mode ?? "explicit-or-inferred");
+  const slot = locateProjectSlot(sourceUtterance, input.mode ?? "explicit-or-inferred");
 
   // A pending confirmation is validated before anything else: if the project
   // vanished (or the catalog is empty), say so instead of silently falling

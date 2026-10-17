@@ -11,6 +11,11 @@ jobs:
       falkordb:
         # Pinned by digest so CI runs the exact image the repo documents.
         image: falkordb/falkordb@sha256:107455e862a824e45e8e9f5a7fbfdf5e00a08b14e13eae2577c72fd9e3f59ba6
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
         ports:
           - 6379:6379
     steps:
@@ -23,3 +28,5 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm test:shuffle
+      - run: pnpm demo:mcp

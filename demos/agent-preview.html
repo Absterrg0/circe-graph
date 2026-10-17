@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>circe-graph · live coding agent</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: #101318;
+      color: #e6eaf0;
+      font:
+        18px/1.5 system-ui,
+        sans-serif;
+    }
+    main {
+      max-width: 1540px;
+      margin: auto;
+      padding: 30px 42px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    h1 {
+      font-size: 33px;
+      margin: 0;
+      font-weight: 650;
+      letter-spacing: -1px;
+    }
+    h1 span {
+      color: #78e2b4;
+    }
+    p {
+      color: #abb5c5;
+      margin: 7px 0 18px;
+      font-size: 17px;
+    }
+    button {
+      background: #78e2b4;
+      color: #10201a;
+      font: 600 16px system-ui;
+      border: 0;
+      border-radius: 8px;
+      padding: 13px 22px;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.65;
+      cursor: default;
+    }
+    .meta {
+      display: flex;
+      gap: 24px;
+      margin: 15px 0;
+      color: #abb5c5;
+      font:
+        14px ui-monospace,
+        monospace;
+    }
+    .meta b {
+      color: #78e2b4;
+    }
+    #log {
+      height: calc(100vh - 220px);
+      min-height: 400px;
+      background: #090c10;
+      border: 1px solid #2c3440;
+      border-radius: 12px;
+      overflow: auto;
+      padding: 20px 26px;
+      font:
+        18px/1.55 ui-monospace,
+        monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .line {
+      margin-bottom: 9px;
+    }
+    .user {
+      color: #8dc8ff;
+    }
+    .tool {
+      color: #c8b0ff;
+    }
+    .graph {
+      color: #78e2b4;
+    }
+    .phase {
+      color: #f7d48c;
+      border-top: 1px solid #2c3440;
+      padding-top: 14px;
+      margin-top: 20px;
+      font-weight: 600;
+    }
+    .fail {
+      color: #ff9a9a;
+    }
+    footer {
+      font-size: 13px;
+      color: #8d97a8;
+      margin-top: 8px;
+    }
+  </style>
+  <main>
+    <header>
+      <h1>circe<span>-graph</span> / live coding agent</h1>
+      <button id="run">Start actual agent run</button>
+    </header>
+    <p>
+      Codex chooses MCP tools. FalkorDB stores the decisions and answers the
+      next agent.
+    </p>
+    <div class="meta">
+      <span id="state">READY</span><span>4 fresh agent processes</span
+      ><span>Graph: <b>circe_agent_demo</b></span>
+    </div>
+    <div id="log" role="log" aria-live="polite">
+      <div class="line">
+        This screen shows events from the running CLI and real MCP responses.
+      </div>
+      <div class="line">
+        The synthetic user replies are predefined. Model output and tool calls
+        are generated live.
+      </div>
+    </div>
+    <footer>
+      Screen capture of the running demo · no typed-in transcript or simulated
+      tool responses · full MCP audit saved with the run
+    </footer>
+  </main>
+  <script>
+    const log = document.querySelector("#log"),
+      state = document.querySelector("#state"),
+      button = document.querySelector("#run");
+    new EventSource("/events").onmessage = (event) => {
+      const line = JSON.parse(event.data);
+      const div = document.createElement("div");
+      div.className =
+        "line " +
+        (line.startsWith("User:")
+          ? "user"
+          : line.startsWith("MCP")
+            ? "tool"
+            : line.startsWith("Graph") || line.startsWith("PASS")
+              ? "graph"
+              : /^\n?[1-4]\./.test(line)
+                ? "phase"
+                : line.startsWith("FAIL")
+                  ? "fail"
+                  : "");
+      div.textContent = line;
+      log.append(div);
+      log.scrollTop = log.scrollHeight;
+    };
+    button.onclick = async () => {
+      button.disabled = true;
+      const result = await fetch("/run", { method: "POST" });
+      if (!result.ok) {
+        state.textContent = await result.text();
+      }
+    };
+    setInterval(async () => {
+      try {
+        const data = await (await fetch("/status")).json();
+        state.textContent = data.state.toUpperCase();
+        if (data.state === "passed") button.textContent = "All checks passed";
+        if (data.state === "running") button.textContent = "Agent is running";
+      } catch {}
+    }, 1000);
+  </script>
+</html>

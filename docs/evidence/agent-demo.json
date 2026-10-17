@@ -1,0 +1,40 @@
+{
+  "recordedAt": "2026-10-17T09:53:50.985Z",
+  "requestedModel": null,
+  "host": "Codex CLI",
+  "graph": "circe_agent_demo",
+  "syntheticUserInputs": true,
+  "actualModelAndMcpCalls": true,
+  "sessions": [
+    {
+      "stage": "ask",
+      "agentPid": 3442115,
+      "answer": "I’ll route this project request through Circe and report the selected project.\n\nCirce selected a route candidate: **Rivvl** on **desktop**. Did you mean Rivvl?",
+      "threadId": "01a14947-50d8-7861-a3cd-6e1040bab56b"
+    },
+    {
+      "stage": "confirm",
+      "agentPid": 3442999,
+      "answer": "I’ll re-check the original “Open Zivil.” request through Circe, use the offered clarification ID it returns, and record only the confirmation you just supplied. I’m also applying the required unslop guidance to keep the report direct; it won’t change the Circe action.\n\nCirce returned a confirmation offer for “Rivvl” with project ID `project-rivvl-desktop`. Your message explicitly confirms that offer, so I’m recording it with the exact original utterance and offered ID.\n\nConfirmation recorded. “Open Zivil.” is now routed to **Rivvl** on **desktop**.\n\nEvidence: `desktop → OWNS → Rivvl`. Circe learned “zivil” as a confirmed alias for Rivvl. No workspace was opened.",
+      "threadId": "01a14947-793d-7e22-b587-b0238b1b2fab"
+    },
+    {
+      "stage": "recall",
+      "agentPid": 3444651,
+      "answer": "I’m using the required writing-cleanup guidance for the response, then I’ll ask Circe to route the “Open Zivil” project request. This will select a route only; it won’t open a workspace.\n\nSelected route: **Rivvl** on **desktop**.\n\nEvidence: “Zivil” is a confirmed alias for Rivvl. The project is connected at `/home/you/code/rivvl`. No workspace was opened.",
+      "threadId": "01a14947-c865-7812-ad7c-8ef719b3188c"
+    },
+    {
+      "stage": "connected",
+      "agentPid": 3445979,
+      "answer": "I’ll query Circe for the impact of `build-box` being offline, then check the graph for another available copy. I’ll keep this read-only and won’t move any work.\n\nSelected Circe’s machine blast-radius query.\n\n- Affected project: **Portfolio**\n- Affected work: **“refresh the portfolio theme”**, currently **queued**\n- Available copy: **Yes** — another **Portfolio** copy exists on **laptop**, which is connected.\n\nEvidence from the graph:\n\n`build-box → OWNS → Portfolio → HAS → refresh the portfolio theme`\n\nIt also reports:\n\n`laptop → OWNS → Portfolio`\n\nNo work was moved.",
+      "threadId": "01a14947-fe99-7041-a4db-b1e6d46b4bb5"
+    }
+  ],
+  "checks": [
+    "confirmation required before learning",
+    "alias learned from explicit confirmation",
+    "fresh agent and server recall from graph",
+    "offline-machine traversal reports task and connected copy"
+  ]
+}

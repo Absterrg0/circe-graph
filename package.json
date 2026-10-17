@@ -1,6 +1,6 @@
 {
   "name": "circe-graph",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.24.0",
@@ -16,7 +16,13 @@
     "demo:ask": "node demos/03-ask-the-graph.ts",
     "mcp": "node mcp/server.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "demo:mcp": "node demos/04-mcp-conversation.ts",
+    "chat": "node mcp/chat.ts",
+    "test:shuffle": "vitest run --sequence.shuffle --sequence.seed=3",
+    "check": "pnpm typecheck && pnpm test && pnpm test:shuffle && pnpm demo:mcp",
+    "demo:agent": "node demos/05-codex-agent.ts",
+    "demo:record": "node demos/record-agent-demo.ts"
   },
   "dependencies": {
     "falkordb": "^6.8.0"

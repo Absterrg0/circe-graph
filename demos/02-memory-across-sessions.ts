@@ -17,8 +17,22 @@
  *
  * Run: node demos/02-memory-across-sessions.ts   (resets the graph to seed first)
  */
-import { closeGraph, countNodes, getGraph, graphName, runCypher } from "../src/falkor.ts";
-import { answerClarification, confirmRoute, routeWithGraph } from "../src/route.ts";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+import type { GraphRoute } from "../src/route.ts";
+import {
+  closeGraph,
+  countNodes,
+  getGraph,
+  graphName,
+  runCypher,
+} from "../src/falkor.ts";
+import {
+  answerClarification,
+  confirmRoute,
+  routeWithGraph,
+} from "../src/route.ts";
 import { SEED_IDS, seedGraph } from "../src/seedGraph.ts";
 
 const oneLine = (value: string): string => value.replace(/\s+/gu, " ").trim();
@@ -33,102 +47,139 @@ try {
   await closeGraph();
   process.exit(1);
 }
-console.log("(This demo reset the graph to the seed so the two sessions are reproducible.)\n");
+console.log(
+  "(This demo reset the graph to the seed so the two sessions are reproducible.)\n",
+);
 
-const UTTERANCE = "I need you to check out Zivil.";
+try {
+  const UTTERANCE = "I need you to check out Zivil.";
 
-console.log("── Session A · the mishearing only earns a question ──");
-const sessionOne = await routeWithGraph(UTTERANCE);
-console.log(`You say:  "${UTTERANCE}"`);
-console.log(`Outcome:  ${sessionOne.outcome}`);
-if (sessionOne.result.status === "needs-confirmation") {
-  console.log(`Circe:    asks "${sessionOne.result.prompt}"`);
-  console.log(`          heard "${sessionOne.result.heard}" — phonetics may ask, never act`);
-}
+  console.log("── Session A · the mishearing only earns a question ──");
+  const sessionOne = await routeWithGraph(UTTERANCE);
+  console.log(`You say:  "${UTTERANCE}"`);
+  console.log(`Outcome:  ${sessionOne.outcome}`);
+  if (sessionOne.result.status === "needs-confirmation") {
+    console.log(`Circe:    asks "${sessionOne.result.prompt}"`);
+    console.log(
+      `          heard "${sessionOne.result.heard}" — phonetics may ask, never act`,
+    );
+  }
 
-console.log("\nYou say:  \"yes\"");
-const confirmed = await confirmRoute(UTTERANCE, SEED_IDS.rivvl);
-console.log(`Outcome:  ${confirmed.outcome}`);
-if (confirmed.learned !== undefined) {
-  console.log(
-    `Learned:  (:Alias {text: "${confirmed.learned.text}", kind: "confirmed"}) — answered from memory next time`,
-  );
-}
-confirmed.cypherPath.paths.forEach((path, index) => {
-  console.log(`${index === 0 ? "Path:     " : "          "}${path}`);
-});
+  console.log('\nYou say:  "yes"');
+  const confirmed = await confirmRoute(UTTERANCE, SEED_IDS.rivvl);
+  console.log(`Outcome:  ${confirmed.outcome}`);
+  if (confirmed.learned !== undefined) {
+    console.log(
+      `Learned:  (:Alias {text: "${confirmed.learned.text}", kind: "confirmed"}) — answered from memory next time`,
+    );
+  }
+  confirmed.cypherPath.paths.forEach((path, index) => {
+    console.log(`${index === 0 ? "Path:     " : "          "}${path}`);
+  });
 
-// What the graph actually kept between the sessions.
-const learnedRows = await runCypher<{ project: string; taughtText: string; taughtAt: string }>(
-  `MATCH (p:Project)-[:LEARNED_ALIAS]->(a:Alias {text: 'zivil'})
+  // What the graph actually kept between the sessions.
+  const learnedRows = await runCypher<{
+    project: string;
+    taughtText: string;
+    taughtAt: string;
+  }>(
+    `MATCH (p:Project)-[:LEARNED_ALIAS]->(a:Alias {text: 'zivil'})
    MATCH (u:Utterance)-[:TAUGHT]->(a)
    RETURN p.title AS project, u.text AS taughtText, u.ts AS taughtAt`,
-);
-const learnedRow = learnedRows[0];
-if (learnedRow !== undefined) {
-  console.log(
-    `\nBetween sessions, the graph holds: (:Project "${learnedRow.project}")-[:LEARNED_ALIAS]->(:Alias "zivil") and (:Utterance "${learnedRow.taughtText}")-[:TAUGHT]->the alias (${shortTs(learnedRow.taughtAt)}).`,
   );
-}
+  const learnedRow = learnedRows[0];
+  if (learnedRow !== undefined) {
+    console.log(
+      `\nBetween sessions, the graph holds: (:Project "${learnedRow.project}")-[:LEARNED_ALIAS]->(:Alias "zivil") and (:Utterance "${learnedRow.taughtText}")-[:TAUGHT]->the alias (${shortTs(learnedRow.taughtAt)}).`,
+    );
+  }
 
-console.log("\n── Session B · same words, new session ──");
-const sessionTwo = await routeWithGraph(UTTERANCE);
-console.log(`You say:  "${UTTERANCE}"`);
-console.log(`Outcome:  ${sessionTwo.outcome}`);
-if (sessionTwo.result.status === "resolved") {
-  console.log(
-    `Circe:    routes to ${sessionTwo.result.project.title} on ${sessionTwo.result.project.machine.name} (${sessionTwo.result.match} match) — it did not ask this time`,
+  console.log("\n── Session B · same words, fresh process ──");
+  await closeGraph();
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [fileURLToPath(new URL("./session-worker.ts", import.meta.url)), UTTERANCE],
+    { env: process.env, timeout: 10_000 },
   );
-}
-sessionTwo.cypherPath.paths.forEach((path, index) => {
-  console.log(`${index === 0 ? "Path:     " : "          "}${path}`);
-});
-
-console.log("\n── Ambiguity that remembers its answer ──");
-console.log('You say:  "Open Portfolio."');
-const askOne = await routeWithGraph("Open Portfolio.");
-if (askOne.result.status === "needs-clarification") {
-  console.log(`Circe:    asks "${askOne.result.prompt}"`);
-  for (const candidate of askOne.result.candidates) console.log(`          option: ${candidate.label}`);
-}
-console.log('You say:  "laptop"  (the copied projectChoice matcher resolves it)');
-const answered = await answerClarification("Open Portfolio.", "laptop");
-if (answered.resolved && answered.project !== undefined) {
+  const fresh = JSON.parse(stdout) as { pid: number; route: GraphRoute };
+  const sessionTwo = fresh.route;
+  if (
+    fresh.pid === process.pid ||
+    sessionTwo.outcome !== "answered_from_memory"
+  ) {
+    throw new Error("Fresh-process persistence check failed");
+  }
   console.log(
-    `Circe:    resolves to ${answered.project.title} on ${answered.project.machine.name} (matched by ${answered.matchKind}: "${answered.matchedText ?? ""}")`,
+    `Process:  Session A PID ${process.pid}; Session B PID ${fresh.pid}`,
   );
-}
+  console.log(`You say:  "${UTTERANCE}"`);
+  console.log(`Outcome:  ${sessionTwo.outcome}`);
+  if (sessionTwo.result.status === "resolved") {
+    console.log(
+      `Circe:    routes to ${sessionTwo.result.project.title} on ${sessionTwo.result.project.machine.name} (${sessionTwo.result.match} match) — it did not ask this time`,
+    );
+  }
+  sessionTwo.cypherPath.paths.forEach((path, index) => {
+    console.log(`${index === 0 ? "Path:     " : "          "}${path}`);
+  });
 
-console.log('\n-- time passes --\nYou say:  "Open Portfolio."');
-const askAgain = await routeWithGraph("Open Portfolio.");
-console.log(`Outcome:  ${askAgain.outcome} (still asking — the name really is ambiguous)`);
-if (askAgain.lastMeant !== undefined) {
+  console.log("\n── Ambiguity that remembers its answer ──");
+  console.log('You say:  "Open Portfolio."');
+  const askOne = await routeWithGraph("Open Portfolio.");
+  if (askOne.result.status === "needs-clarification") {
+    console.log(`Circe:    asks "${askOne.result.prompt}"`);
+    for (const candidate of askOne.result.candidates)
+      console.log(`          option: ${candidate.label}`);
+  }
   console.log(
-    `Last time: you meant ${askAgain.lastMeant.label} (${shortTs(askAgain.lastMeant.ts)}) — the graph showed its own precedent`,
+    'You say:  "laptop"  (the copied projectChoice matcher resolves it)',
   );
+  const answered = await answerClarification("Open Portfolio.", "laptop");
+  if (answered.resolved && answered.project !== undefined) {
+    console.log(
+      `Circe:    resolves to ${answered.project.title} on ${answered.project.machine.name} (matched by ${answered.matchKind}: "${answered.matchedText ?? ""}")`,
+    );
+  }
+
+  console.log('\n-- time passes --\nYou say:  "Open Portfolio."');
+  const askAgain = await routeWithGraph("Open Portfolio.");
+  console.log(
+    `Outcome:  ${askAgain.outcome} (still asking — the name really is ambiguous)`,
+  );
+  if (askAgain.lastMeant !== undefined) {
+    console.log(
+      `Last time: you meant ${askAgain.lastMeant.label} (${shortTs(askAgain.lastMeant.ts)}) — the graph showed its own precedent`,
+    );
+  }
+
+  console.log("\n── Memory read before reasoning ──");
+  console.log('You say:  "start a task in Rivvl to fix the login bug"');
+  const recalled = await routeWithGraph(
+    "start a task in Rivvl to fix the login bug",
+  );
+  console.log(`Outcome:  ${recalled.outcome}`);
+  recalled.memory.forEach((note, index) => {
+    console.log(
+      `${index === 0 ? "Memory:   " : "          "}"${oneLine(note.text)}" (${shortTs(note.ts)})`,
+    );
+  });
+
+  const utterances = await countNodes("Utterance");
+  const episodes = await countNodes("Episode");
+  const aliases = await countNodes("Alias");
+  const lastMeant = Number(
+    (
+      await runCypher<{ total: number }>(
+        "MATCH (:Heard)-[l:LAST_MEANT]->(:Project) RETURN count(l) AS total",
+      )
+    )[0]?.total ?? 0,
+  );
+  console.log(
+    `\nGraph memory now: ${utterances} utterances · ${episodes} episodes · ${aliases} aliases · last-meant remembered: ${lastMeant > 0}.`,
+  );
+  console.log(
+    "Session B ran in a separate process; learned aliases and episodes came from the shared graph.",
+  );
+} finally {
+  await closeGraph();
 }
-
-console.log("\n── Memory read before reasoning ──");
-console.log('You say:  "start a task in Rivvl to fix the login bug"');
-const recalled = await routeWithGraph("start a task in Rivvl to fix the login bug");
-console.log(`Outcome:  ${recalled.outcome}`);
-recalled.memory.forEach((note, index) => {
-  console.log(`${index === 0 ? "Memory:   " : "          "}"${oneLine(note.text)}" (${shortTs(note.ts)})`);
-});
-
-const utterances = await countNodes("Utterance");
-const episodes = await countNodes("Episode");
-const aliases = await countNodes("Alias");
-const lastMeant = Number(
-  (
-    await runCypher<{ total: number }>(
-      "MATCH (:Heard)-[l:LAST_MEANT]->(:Project) RETURN count(l) AS total",
-    )
-  )[0]?.total ?? 0,
-);
-console.log(
-  `\nGraph memory now: ${utterances} utterances · ${episodes} episodes · ${aliases} aliases · last-meant remembered: ${lastMeant > 0}.`,
-);
-console.log("Nothing above lived in process memory; every session read and wrote the same graph.");
-
-await closeGraph();

@@ -2,8 +2,7 @@
  * routeWithGraph: one spoken turn, grounded and remembered.
  *
  * 1. candidates come from Cypher (catalog.ts) — never from an in-memory array;
- * 2. the copied groundVoiceTurn decides the route with byte-identical
- *    semantics; the graph only supplies candidates plus the memory it holds;
+ * 2. groundVoiceTurn decides the route with its original scoring rules; the graph only supplies candidates plus the memory it holds;
  * 3. resolved, clarified, and answered turns are written back: the utterance,
  *    the project it resolved to, an episode ABOUT that project, and — when the
  *    user confirmed a pronunciation — a confirmed alias, so the next session
@@ -18,11 +17,23 @@
  */
 import { randomUUID } from "node:crypto";
 
-import type { CandidateEvidence, GraphCandidate, GraphProject } from "./catalog.ts";
-import { lookupCandidates, normalizeName } from "./catalog.ts";
+import type {
+  CandidateEvidence,
+  GraphCandidate,
+  GraphProject,
+} from "./catalog.ts";
+import {
+  candidatesForMatchedSpan,
+  lookupCandidates,
+  normalizeName,
+} from "./catalog.ts";
 import { runCypher, runRead, type GraphRow } from "./falkor.ts";
 import type { GroundedVoiceTurn } from "./groundVoiceTurn.ts";
-import { groundVoiceTurn } from "./groundVoiceTurn.ts";
+import {
+  groundVoiceTurn,
+  locateProjectSlot,
+  TASK_DOMAIN_TOKENS,
+} from "./groundVoiceTurn.ts";
 import type { CirceProjectChoiceMatch } from "./projectChoice.ts";
 import { resolveCirceProjectChoice } from "./projectChoice.ts";
 
@@ -95,6 +106,7 @@ export interface CypherPath {
 }
 
 export interface GraphRoute {
+  readonly untrusted: true;
   readonly outcome: RouteOutcome;
   readonly result: GroundedVoiceTurn<GraphProject>;
   readonly cypherPath: CypherPath;
@@ -141,11 +153,10 @@ RETURN p.id AS projectId, p.title AS projectTitle, m.name AS machineName, l.ts A
 ORDER BY l.ts DESC
 LIMIT 1`;
 
-const RESOLVED_WRITE_BACK = `MERGE (u:User {id: $userId})
+const RESOLVED_WRITE_BACK = `MATCH (p:Project {id: $projectId})
+MERGE (u:User {id: $userId})
 CREATE (ut:Utterance {id: $utteranceId, text: $text, ts: $ts, status: 'resolved', heard: $heard, match: $match})
 CREATE (u)-[:SAID]->(ut)
-WITH ut
-MATCH (p:Project {id: $projectId})
 CREATE (ut)-[:RESOLVED_TO {match: $match}]->(p)
 CREATE (e:Episode:Memory {id: $episodeId, text: $text, ts: $ts, status: 'resolved'})
 CREATE (e)-[:ABOUT]->(p)
@@ -162,11 +173,10 @@ RETURN ut.id AS utteranceId`;
 // A clarification answer is a resolution: it resolves the utterance, records
 // the episode, and remembers what this phrase meant (LAST_MEANT) so the next
 // identical ask can show the user their own precedent.
-const ANSWER_WRITE_BACK = `MERGE (u:User {id: $userId})
+const ANSWER_WRITE_BACK = `MATCH (p:Project {id: $projectId})
+MERGE (u:User {id: $userId})
 CREATE (ut:Utterance {id: $utteranceId, text: $text, ts: $ts, status: 'clarified', heard: $heard, answer: $answer, answerKind: $answerKind})
 CREATE (u)-[:SAID]->(ut)
-WITH ut
-MATCH (p:Project {id: $projectId})
 CREATE (ut)-[:RESOLVED_TO {match: $answerKind}]->(p)
 CREATE (e:Episode:Memory {id: $episodeId, text: $text, ts: $ts, status: 'resolved', answer: $answer})
 CREATE (e)-[:ABOUT]->(p)
@@ -180,11 +190,16 @@ RETURN ut.id AS utteranceId, p.id AS projectId`;
 // the ON MATCH below can only ever touch this project's own alias.
 const LEARN_ALIAS_WRITE = `MATCH (p:Project {id: $projectId})
 MATCH (ut:Utterance {id: $utteranceId})
+OPTIONAL MATCH (other:Project)-[:LEARNED_ALIAS]->(existing:Alias {text: $text})
+WHERE other.id <> $projectId
+WITH p, ut, collect(other.id) AS owners
+WHERE size(owners) = 0
 MERGE (a:Alias {projectId: $projectId, text: $text})
 ON CREATE SET a.id = $aliasId, a.kind = 'confirmed', a.ts = $ts
 ON MATCH SET a.kind = 'confirmed'
 MERGE (p)-[l:LEARNED_ALIAS]->(a)
 ON CREATE SET l.source = 'confirmation', l.ts = $ts
+ON MATCH SET l.source = 'confirmation', l.ts = $ts
 MERGE (ut)-[:TAUGHT]->(a)
 RETURN a.text AS aliasText, p.id AS projectId`;
 
@@ -196,9 +211,6 @@ RETURN other.title AS title, collect(a.text) AS aliasTexts`;
 
 /** The target project's own title, for the canonical-title no-op check. */
 const OWN_TITLE_QUERY = `MATCH (p:Project {id: $projectId}) RETURN p.title AS title`;
-
-/** Whether a stale confirmedCandidateId still exists as a project. */
-const PROJECT_EXISTS_QUERY = `MATCH (p:Project {id: $projectId}) RETURN p.id AS projectId`;
 
 interface PathRow extends GraphRow {
   readonly projectId: string;
@@ -243,10 +255,14 @@ function matchedProjectIds(result: GroundedVoiceTurn<GraphProject>): string[] {
  * Read before you reason: the episodes the graph already holds about these
  * projects, newest first, at most three per project.
  */
-async function recallMemory(projectIds: ReadonlyArray<string>): Promise<ReadonlyArray<MemoryNote>> {
+async function recallMemory(
+  projectIds: ReadonlyArray<string>,
+): Promise<ReadonlyArray<MemoryNote>> {
   const unique = [...new Set(projectIds)];
   if (unique.length === 0) return [];
-  const rows = await runRead<RecallRow>(MEMORY_RECALL_QUERY, { projectIds: unique });
+  const rows = await runRead<RecallRow>(MEMORY_RECALL_QUERY, {
+    projectIds: unique,
+  });
   const perProject = new Map<string, MemoryNote[]>();
   for (const row of rows) {
     const notes = perProject.get(row.projectId) ?? [];
@@ -265,7 +281,9 @@ async function recallMemory(projectIds: ReadonlyArray<string>): Promise<Readonly
   // newest-first order — a host may render this list exactly as it was sent.
   return [...perProject.values()]
     .flat()
-    .sort((left, right) => (left.ts < right.ts ? 1 : left.ts > right.ts ? -1 : 0));
+    .sort((left, right) =>
+      left.ts < right.ts ? 1 : left.ts > right.ts ? -1 : 0,
+    );
 }
 
 /** What this exact phrase meant the last time a clarification answered it. */
@@ -276,7 +294,9 @@ async function lastMeantFor(heard: string): Promise<LastMeant | undefined> {
   const row = rows[0];
   if (row === undefined) return undefined;
   const label =
-    row.machineName == null ? row.projectTitle : `${row.projectTitle} on ${row.machineName}`;
+    row.machineName == null
+      ? row.projectTitle
+      : `${row.projectTitle} on ${row.machineName}`;
   return { heard: text, projectId: row.projectId, label, ts: row.ts };
 }
 
@@ -302,7 +322,9 @@ async function explainPaths(
   context: { readonly confirmedThisCall: boolean },
 ): Promise<ReadonlyArray<string>> {
   if (projectIds.length === 0) return [];
-  const rows = await runRead<PathRow>(PATH_QUERY, { projectIds: [...projectIds] });
+  const rows = await runRead<PathRow>(PATH_QUERY, {
+    projectIds: [...projectIds],
+  });
   const evidenceByProject = new Map<string, CandidateEvidence>(
     candidates.map((candidate) => [candidate.id, candidate.evidence]),
   );
@@ -321,8 +343,12 @@ async function explainPaths(
       entry.aliases.push({
         text: row.aliasText,
         kind: typeof row.aliasKind === "string" ? row.aliasKind : "hint",
-        ...(typeof row.aliasSource === "string" ? { source: row.aliasSource } : {}),
-        ...(typeof row.taughtText === "string" ? { taughtText: row.taughtText } : {}),
+        ...(typeof row.aliasSource === "string"
+          ? { source: row.aliasSource }
+          : {}),
+        ...(typeof row.taughtText === "string"
+          ? { taughtText: row.taughtText }
+          : {}),
         ...(typeof row.taughtAt === "string" ? { taughtAt: row.taughtAt } : {}),
       });
     }
@@ -337,7 +363,9 @@ async function explainPaths(
     const markers: string[] = [];
     if (evidence?.pass === "exact") {
       if (evidence.kind === "alias") {
-        const alias = entry.aliases.find((item) => item.text === evidence.matched);
+        const alias = entry.aliases.find(
+          (item) => item.text === evidence.matched,
+        );
         const aliasKind = alias?.kind === "confirmed" ? "confirmed" : "hint";
         line += `-[:LEARNED_ALIAS${alias?.source === undefined ? "" : ` {source: ${JSON.stringify(alias.source)}}`}]->(:Alias {text: ${JSON.stringify(evidence.matched)}, kind: ${JSON.stringify(aliasKind)}})`;
         markers.push(
@@ -382,13 +410,16 @@ async function recordTurn(
   const { episodeId, ...turn } = ids;
   const base = { ...turn, text: utterance };
   if (result.status === "resolved") {
-    const written = await runCypher<{ projectId: string }>(RESOLVED_WRITE_BACK, {
-      ...base,
-      episodeId,
-      heard: result.heard,
-      match: result.match,
-      projectId: result.project.id,
-    });
+    const written = await runCypher<{ projectId: string }>(
+      RESOLVED_WRITE_BACK,
+      {
+        ...base,
+        episodeId,
+        heard: result.heard,
+        match: result.match,
+        projectId: result.project.id,
+      },
+    );
     if (written.length === 0) {
       throw new Error(
         `write-back failed: project ${result.project.id} no longer exists — the turn was not recorded`,
@@ -397,11 +428,15 @@ async function recordTurn(
     return;
   }
   if (result.status === "needs-clarification") {
-    await runCypher(CLARIFIED_WRITE_BACK, {
+    const written = await runCypher(CLARIFIED_WRITE_BACK, {
       ...base,
       heard: result.heard,
       options: result.candidates.map(({ label }) => label),
     });
+    if (written.length === 0)
+      throw new Error(
+        "clarification write-back failed: the question was not recorded",
+      );
   }
 }
 
@@ -428,14 +463,17 @@ export async function learnConfirmedAlias(input: {
 }): Promise<LearnOutcome> {
   const text = normalizeName(input.heard);
   if (text.length < 3) return { kind: "no-op" };
-  const own = await runRead<{ title: string }>(OWN_TITLE_QUERY, { projectId: input.projectId });
+  const own = await runRead<{ title: string }>(OWN_TITLE_QUERY, {
+    projectId: input.projectId,
+  });
   const ownTitle = own[0]?.title;
   // The canonical title already routes exactly; confirming it teaches nothing.
-  if (ownTitle !== undefined && normalizeName(ownTitle) === text) return { kind: "no-op" };
-  const clashRows = await runRead<{ title: string; aliasTexts: ReadonlyArray<string | null> }>(
-    CLASH_PROBE_QUERY,
-    { projectId: input.projectId },
-  );
+  if (ownTitle !== undefined && normalizeName(ownTitle) === text)
+    return { kind: "no-op" };
+  const clashRows = await runRead<{
+    title: string;
+    aliasTexts: ReadonlyArray<string | null>;
+  }>(CLASH_PROBE_QUERY, { projectId: input.projectId });
   const titleClash = clashRows.find((row) => normalizeName(row.title) === text);
   if (titleClash !== undefined) {
     return {
@@ -448,7 +486,8 @@ export async function learnConfirmedAlias(input: {
   }
   const aliasClash = clashRows.find((row) =>
     row.aliasTexts.some(
-      (aliasText) => typeof aliasText === "string" && normalizeName(aliasText) === text,
+      (aliasText) =>
+        typeof aliasText === "string" && normalizeName(aliasText) === text,
     ),
   );
   if (aliasClash !== undefined) {
@@ -469,6 +508,21 @@ export async function learnConfirmedAlias(input: {
     ts,
   });
   if (written.length === 0) {
+    // A different process may have acquired this normalized alias since the
+    // explanatory probe. The guarded write checks ownership in the database.
+    const owners = await runRead<{ title: string }>(
+      `MATCH (other:Project)-[:LEARNED_ALIAS]->(:Alias {text: $text})
+       WHERE other.id <> $projectId RETURN other.title AS title`,
+      { text, projectId: input.projectId },
+    );
+    if (owners.length > 0)
+      return {
+        kind: "refused",
+        refusal: {
+          text,
+          reason: `${JSON.stringify(text)} already means another project (${JSON.stringify(owners[0]?.title)})`,
+        },
+      };
     throw new Error(
       `alias learning failed: project ${input.projectId} or utterance ${input.utteranceId} vanished mid-turn — nothing was learned`,
     );
@@ -488,18 +542,26 @@ export async function learnConfirmedAlias(input: {
  * Labelling only: routing never consults it.
  */
 function inferredUnmatchedName(utterance: string): string | undefined {
-  const trimmed = utterance.trim();
-  const verbObject =
-    /\b(?:check out|look at|inspect|review|open|work on|compare)\s+(?:the\s+)?(.+)$/iu.exec(trimmed);
-  const trailingPrep =
-    /\b(?:in|inside|within|on|for|of|to|into)\s+(?:the\s+)?([^,;.!?]+?)\s*[.!?]*$/iu.exec(trimmed);
-  const raw = verbObject?.[1] ?? trailingPrep?.[1];
-  if (raw === undefined) return undefined;
-  const slot = raw
-    .split(/[,;.!?]/u)[0]
-    ?.split(/\s+(?:to|and|then|also|so)\s+/iu)[0]
-    ?.trim();
-  return slot === undefined || slot.length === 0 ? undefined : slot;
+  const source = utterance.trim();
+  const slot = locateProjectSlot(source);
+  if (slot === undefined) return undefined;
+  const name = source
+    .slice(slot.start, slot.end)
+    .trim()
+    .replace(/[.!?]+$/u, "")
+    .replace(/\s+to$/iu, "")
+    .trim();
+  // The core excludes version-control vocabulary from inferred mentions.
+  // An explicit slot such as "In Javis, review the pull request" still names Javis.
+  if (
+    !slot.explicit &&
+    normalizeName(name)
+      .split(" ")
+      .some((word) => TASK_DOMAIN_TOKENS.has(word))
+  ) {
+    return undefined;
+  }
+  return name.length === 0 ? undefined : name;
 }
 
 /**
@@ -517,7 +579,9 @@ function classifyOutcome(
 ): RouteOutcome {
   switch (result.status) {
     case "resolved": {
-      const evidence = candidates.find((candidate) => candidate.id === result.project.id)?.evidence;
+      const evidence = candidates.find(
+        (candidate) => candidate.id === result.project.id,
+      )?.evidence;
       const fromMemory =
         !confirmedThisCall &&
         evidence?.pass === "exact" &&
@@ -528,14 +592,18 @@ function classifyOutcome(
     case "needs-confirmation":
       return "needs_confirmation";
     case "needs-clarification":
-      return result.prompt.startsWith("I couldn't match") ? "not_in_graph" : "needs_clarification";
+      return result.prompt.startsWith("I couldn't match")
+        ? "not_in_graph"
+        : "needs_clarification";
     case "not-mentioned":
       return unmatchedName === undefined ? "no_project_named" : "not_in_graph";
   }
 }
 
 /** The structured "this machine is down" signal, from any project. */
-function disconnectedMachineOf(project: GraphProject): DisconnectedMachine | undefined {
+function disconnectedMachineOf(
+  project: GraphProject,
+): DisconnectedMachine | undefined {
   const { machine } = project;
   if (machine.connected) return undefined;
   return {
@@ -548,7 +616,8 @@ function disconnectedMachineOf(project: GraphProject): DisconnectedMachine | und
 function disconnectedTarget(
   result: GroundedVoiceTurn<GraphProject>,
 ): DisconnectedMachine | undefined {
-  if (result.status !== "resolved" && result.status !== "needs-confirmation") return undefined;
+  if (result.status !== "resolved" && result.status !== "needs-confirmation")
+    return undefined;
   return disconnectedMachineOf(result.project);
 }
 
@@ -561,31 +630,57 @@ export async function routeWithGraph(
   utterance: string,
   options: RouteOptions = {},
 ): Promise<GraphRoute> {
-  const lookup = await lookupCandidates(utterance);
-  const result = groundVoiceTurn({
+  const lookup = await lookupCandidates(utterance, options.mode);
+  const pending = groundVoiceTurn({
     utterance,
     candidates: lookup.candidates,
-    ...(options.mode === undefined ? {} : { mode: options.mode }),
-    ...(options.confirmedCandidateId === undefined
-      ? {}
-      : { confirmedCandidateId: options.confirmedCandidateId }),
+    mode: options.mode,
   });
-  const confirmedThisCall = options.confirmedCandidateId !== undefined;
+  const targetOffered =
+    options.confirmedCandidateId === undefined ||
+    matchedProjectIds(pending).includes(options.confirmedCandidateId);
+  const result: GroundedVoiceTurn<GraphProject> = !targetOffered
+    ? {
+        status: "needs-clarification",
+        sourceUtterance: utterance.trim(),
+        heard: "heard" in pending ? pending.heard : utterance.trim(),
+        prompt:
+          "That project was not offered or is no longer available. Which project did you mean?",
+        candidates: lookup.candidates.map((candidate) => ({
+          project: candidate.project,
+          label: candidate.label ?? candidate.title,
+        })),
+      }
+    : groundVoiceTurn({
+        utterance,
+        candidates: lookup.candidates,
+        ...(options.mode === undefined ? {} : { mode: options.mode }),
+        ...(options.confirmedCandidateId === undefined
+          ? {}
+          : { confirmedCandidateId: options.confirmedCandidateId }),
+      });
+  const confirmedThisCall =
+    targetOffered && options.confirmedCandidateId !== undefined;
   // The core folds an unmatched name into not-mentioned; the graph layer keeps
   // the distinction (a name was heard vs none) alive for its outcome types.
   // The clarification branch already names the heard span — trimmed to the
   // name itself by inferredUnmatchedName, falling back to the core's raw span
   // — and the folded branch is recovered from the utterance's syntax.
   const unmatchedClarification =
-    result.status === "needs-clarification" && result.prompt.startsWith("I couldn't match");
+    result.status === "needs-clarification" &&
+    result.prompt.startsWith("I couldn't match");
   const unmatchedName = unmatchedClarification
     ? (inferredUnmatchedName(utterance) ?? result.heard)
     : result.status === "not-mentioned" && lookup.pass === "catalog-fallback"
       ? inferredUnmatchedName(utterance)
       : undefined;
+  const evidenceCandidates =
+    "heard" in result
+      ? candidatesForMatchedSpan(lookup, result.heard)
+      : lookup.candidates;
   const projectIds = matchedProjectIds(result);
   const [paths, memory] = await Promise.all([
-    explainPaths(lookup.candidates, projectIds, { confirmedThisCall }),
+    explainPaths(evidenceCandidates, projectIds, { confirmedThisCall }),
     recallMemory(projectIds),
   ]);
   const ids: TurnIds = {
@@ -598,7 +693,11 @@ export async function routeWithGraph(
 
   let learned: LearnedAlias | undefined;
   let learningRefused: AliasLearningRefused | undefined;
-  if (confirmedThisCall && result.status === "resolved" && result.match === "confirmed-pronunciation") {
+  if (
+    confirmedThisCall &&
+    result.status === "resolved" &&
+    result.match === "confirmed-pronunciation"
+  ) {
     if (result.span === undefined) {
       // Confirmed with no audible mention of the project in this utterance:
       // there is no phrasing to learn, and teaching the whole sentence as an
@@ -621,17 +720,22 @@ export async function routeWithGraph(
   // A host that confirms a candidate it was never offered (stale state, or a
   // changed utterance) gets a flag, not the core's "no longer available" story.
   const confirmedTargetNotOffered: true | undefined =
-    options.confirmedCandidateId !== undefined &&
-    !lookup.candidates.some((candidate) => candidate.id === options.confirmedCandidateId) &&
-    (await runRead<{ projectId: string }>(PROJECT_EXISTS_QUERY, {
-      projectId: options.confirmedCandidateId,
-    })).length > 0
+    options.confirmedCandidateId !== undefined && !targetOffered
       ? true
       : undefined;
-  const lastMeant = result.status === "needs-clarification" ? await lastMeantFor(result.heard) : undefined;
+  const lastMeant =
+    result.status === "needs-clarification"
+      ? await lastMeantFor(result.heard)
+      : undefined;
   const disconnectedMachine = disconnectedTarget(result);
   return {
-    outcome: classifyOutcome(result, lookup.candidates, confirmedThisCall, unmatchedName),
+    untrusted: true,
+    outcome: classifyOutcome(
+      result,
+      evidenceCandidates,
+      confirmedThisCall,
+      unmatchedName,
+    ),
     result,
     cypherPath: {
       query: lookup.query,
@@ -645,12 +749,15 @@ export async function routeWithGraph(
     ...(learned === undefined ? {} : { learned }),
     ...(learningRefused === undefined ? {} : { learningRefused }),
     ...(unmatchedName === undefined ? {} : { unmatchedName }),
-    ...(confirmedTargetNotOffered === undefined ? {} : { confirmedTargetNotOffered }),
+    ...(confirmedTargetNotOffered === undefined
+      ? {}
+      : { confirmedTargetNotOffered }),
     ...(disconnectedMachine === undefined ? {} : { disconnectedMachine }),
   };
 }
 
 export interface ClarificationAnswer {
+  readonly untrusted: true;
   readonly resolved: boolean;
   readonly reason?: "not-a-clarification" | "no-match";
   /** What the router asked (a needs-clarification turn), re-grounded deterministically. */
@@ -686,10 +793,19 @@ export async function answerClarification(
     paths: [],
   };
   if (pending.status !== "needs-clarification") {
-    return { resolved: false, reason: "not-a-clarification", pending, memory: [], cypherPath: lookupPath };
+    return {
+      untrusted: true,
+      resolved: false,
+      reason: "not-a-clarification",
+      pending,
+      memory: [],
+      cypherPath: lookupPath,
+    };
   }
   const offered = pending.candidates.map(({ project, label }) => {
-    const full = lookup.candidates.find((candidate) => candidate.id === project.id);
+    const full = lookup.candidates.find(
+      (candidate) => candidate.id === project.id,
+    );
     return {
       title: project.title,
       label,
@@ -703,17 +819,29 @@ export async function answerClarification(
   });
   if (match === null) {
     return {
+      untrusted: true,
       resolved: false,
       reason: "no-match",
       pending,
-      memory: await recallMemory(pending.candidates.map(({ project }) => project.id)),
+      memory: await recallMemory(
+        pending.candidates.map(({ project }) => project.id),
+      ),
       cypherPath: lookupPath,
     };
   }
   const offeredProject = pending.candidates[match.index]?.project;
-  const chosen = lookup.candidates.find((candidate) => candidate.id === offeredProject?.id);
+  const chosen = lookup.candidates.find(
+    (candidate) => candidate.id === offeredProject?.id,
+  );
   if (chosen === undefined) {
-    return { resolved: false, reason: "no-match", pending, memory: [], cypherPath: lookupPath };
+    return {
+      untrusted: true,
+      resolved: false,
+      reason: "no-match",
+      pending,
+      memory: [],
+      cypherPath: lookupPath,
+    };
   }
   const ids: TurnIds = {
     userId: LOCAL_USER_ID,
@@ -741,6 +869,7 @@ export async function answerClarification(
   ]);
   const disconnectedMachine = disconnectedMachineOf(chosen.project);
   return {
+    untrusted: true,
     resolved: true,
     pending,
     project: chosen.project,

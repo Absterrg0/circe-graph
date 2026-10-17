@@ -1,17 +1,17 @@
-/**
- * The learning flow, isolated in its own graph: teaching the graph is
- * permanent state, so keeping it out of route.test.ts is what makes that file
- * safe under --sequence.shuffle. Order matters *within* this file: later tests
- * assert on the names list, so tests that add aliases run after them.
- */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+/** Learning tests reset their graph before each case, including shuffled runs. */
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { getCandidates } from "./catalog.ts";
-import { closeGraph, getGraph, runCypher, type CypherParams } from "./falkor.ts";
+import {
+  closeGraph,
+  getGraph,
+  runCypher,
+  type CypherParams,
+} from "./falkor.ts";
 import { confirmRoute, learnConfirmedAlias, routeWithGraph } from "./route.ts";
 import { SEED_IDS, seedGraph } from "./seedGraph.ts";
 
-beforeAll(async () => {
+beforeEach(async () => {
   process.env.CIRCE_GRAPH = "circe_test_route_learning";
   await seedGraph(await getGraph());
 });
@@ -20,17 +20,23 @@ afterAll(async () => {
   await closeGraph();
 });
 
-const count = async (cypher: string, params: CypherParams = {}): Promise<number> =>
+const count = async (
+  cypher: string,
+  params: CypherParams = {},
+): Promise<number> =>
   Number((await runCypher<{ total: number }>(cypher, params))[0]?.total ?? 0);
 
 /** A minimal utterance, for learnConfirmedAlias's provenance edge. */
 const freshUtterance = async (text: string): Promise<string> => {
   const id = `utterance-test-${Math.random().toString(36).slice(2, 10)}`;
-  await runCypher("CREATE (:Utterance {id: $id, text: $text, ts: $ts, status: 'resolved'})", {
-    id,
-    text,
-    ts: new Date().toISOString(),
-  });
+  await runCypher(
+    "CREATE (:Utterance {id: $id, text: $text, ts: $ts, status: 'resolved'})",
+    {
+      id,
+      text,
+      ts: new Date().toISOString(),
+    },
+  );
   return id;
 };
 
@@ -43,7 +49,8 @@ describe("learning", () => {
       utteranceId: await freshUtterance("Portfolio"),
     });
     expect(byTitle.kind).toBe("refused");
-    if (byTitle.kind === "refused") expect(byTitle.refusal.reason).toContain("Portfolio");
+    if (byTitle.kind === "refused")
+      expect(byTitle.refusal.reason).toContain("Portfolio");
 
     // Another project's learned alias (the seeded hint "rival" on Rivvl).
     const byAlias = await learnConfirmedAlias({
@@ -52,7 +59,8 @@ describe("learning", () => {
       utteranceId: await freshUtterance("Rival!"),
     });
     expect(byAlias.kind).toBe("refused");
-    if (byAlias.kind === "refused") expect(byAlias.refusal.reason).toContain("another project");
+    if (byAlias.kind === "refused")
+      expect(byAlias.refusal.reason).toContain("another project");
 
     // A project's own canonical title already routes exactly: nothing to teach.
     const canonical = await learnConfirmedAlias({
@@ -63,8 +71,6 @@ describe("learning", () => {
     expect(canonical.kind).toBe("no-op");
   });
 
-  // Teaches "zivil" for good; the names assertion below must see it before
-  // any later test adds another alias.
   it("learns a confirmed pronunciation and answers it from memory next session", async () => {
     const utterance = "I need you to check out Zivil.";
     const confirmed = await confirmRoute(utterance, SEED_IDS.rivvl);
@@ -74,7 +80,10 @@ describe("learning", () => {
       match: "confirmed-pronunciation",
       project: { id: SEED_IDS.rivvl },
     });
-    expect(confirmed.learned).toMatchObject({ text: "zivil", projectId: SEED_IDS.rivvl });
+    expect(confirmed.learned).toMatchObject({
+      text: "zivil",
+      projectId: SEED_IDS.rivvl,
+    });
 
     // The graph kept the confirmation with provenance: project → alias, and
     // the utterance that taught it → alias.
@@ -93,7 +102,10 @@ describe("learning", () => {
 
     // A confirmed alias is part of how the project is named now.
     const candidates = await getCandidates(utterance);
-    expect(candidates.find(({ id }) => id === SEED_IDS.rivvl)?.names).toEqual(["Rivvl", "zivil"]);
+    expect(candidates.find(({ id }) => id === SEED_IDS.rivvl)?.names).toEqual([
+      "Rivvl",
+      "zivil",
+    ]);
 
     // Session two: the same words, answered from memory.
     const next = await routeWithGraph(utterance);
@@ -110,13 +122,24 @@ describe("learning", () => {
     expect(next.cypherPath.paths[0]).toContain("answered from memory");
   });
 
+  it("upgrades a hint with the confirmation's provenance", async () => {
+    const confirmed = await confirmRoute("Open rival.", SEED_IDS.rivvl);
+    expect(confirmed.learned?.text).toBe("rival");
+    const next = await routeWithGraph("Open rival.");
+    expect(next.outcome).toBe("answered_from_memory");
+    expect(next.cypherPath.paths.join(" ")).toContain('source: "confirmation"');
+  });
+
   it("keys a learned alias to its own project only", async () => {
     const learned = await learnConfirmedAlias({
       heard: "Spindrift",
       projectId: SEED_IDS.rivvl,
       utteranceId: await freshUtterance("Spindrift"),
     });
-    expect(learned).toMatchObject({ kind: "learned", alias: { text: "spindrift" } });
+    expect(learned).toMatchObject({
+      kind: "learned",
+      alias: { text: "spindrift" },
+    });
     expect(
       await count(
         "MATCH (:Project {id: $id})-[:LEARNED_ALIAS]->(a:Alias {text: 'spindrift'}) RETURN count(a) AS total",
@@ -125,9 +148,12 @@ describe("learning", () => {
     ).toBe(1);
     // The node carries its owner, and another project cannot re-teach it.
     expect(
-      await count("MATCH (a:Alias {text: 'spindrift', projectId: $id}) RETURN count(a) AS total", {
-        id: SEED_IDS.rivvl,
-      }),
+      await count(
+        "MATCH (a:Alias {text: 'spindrift', projectId: $id}) RETURN count(a) AS total",
+        {
+          id: SEED_IDS.rivvl,
+        },
+      ),
     ).toBe(1);
     const stolen = await learnConfirmedAlias({
       heard: "Spindrift",

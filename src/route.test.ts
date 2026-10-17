@@ -1,10 +1,5 @@
-/**
- * Route tests run against a live FalkorDB (docker compose up -d) on a
- * separate graph so they never touch the demo data. Nothing here teaches the
- * graph permanently — the learning flow lives in route.learning.test.ts —
- * so this file stays order-independent and safe under --sequence.shuffle.
- */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+/** Routing integration tests use a freshly seeded test graph for each case. */
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { closeGraph, getGraph, runCypher, type CypherParams } from "./falkor.ts";
 import { answerClarification, confirmRoute, routeWithGraph } from "./route.ts";
@@ -13,7 +8,7 @@ import { SEED_IDS, seedGraph } from "./seedGraph.ts";
 const count = async (cypher: string, params: CypherParams = {}): Promise<number> =>
   Number((await runCypher<{ total: number }>(cypher, params))[0]?.total ?? 0);
 
-beforeAll(async () => {
+beforeEach(async () => {
   process.env.CIRCE_GRAPH = "circe_test_route";
   await seedGraph(await getGraph());
 });

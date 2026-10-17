@@ -2,13 +2,13 @@
  * MCP protocol tests: drive the handler directly (no process spawn) against a
  * live FalkorDB on a separate graph.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { closeGraph, getGraph } from "../src/falkor.ts";
 import { seedGraph } from "../src/seedGraph.ts";
 import { handleMcpMessage } from "./server.ts";
 
-beforeAll(async () => {
+beforeEach(async () => {
   process.env.CIRCE_GRAPH = "circe_test_mcp";
   await seedGraph(await getGraph());
 });
@@ -17,7 +17,9 @@ afterAll(async () => {
   await closeGraph();
 });
 
-const call = async (message: Record<string, unknown>): Promise<Record<string, unknown>> => {
+const call = async (
+  message: Record<string, unknown>,
+): Promise<Record<string, unknown>> => {
   const response = await handleMcpMessage(JSON.stringify(message));
   expect(response).not.toBeNull();
   return JSON.parse(response as string) as Record<string, unknown>;
@@ -25,7 +27,12 @@ const call = async (message: Record<string, unknown>): Promise<Record<string, un
 
 describe("handleMcpMessage", () => {
   it("speaks initialize, ping, and tools/list", async () => {
-    const init = await call({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    const init = await call({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {},
+    });
     expect(init.result).toMatchObject({
       protocolVersion: "2024-11-05",
       serverInfo: { name: "circe-graph" },
@@ -52,6 +59,8 @@ describe("handleMcpMessage", () => {
     const tools = (list.result as { tools: Array<{ name: string }> }).tools;
     expect(tools.map(({ name }) => name)).toEqual([
       "route_request",
+      "confirm_route",
+      "answer_clarification",
       "whats_running",
       "machine_blast_radius",
       "project_history",
@@ -93,7 +102,10 @@ describe("handleMcpMessage", () => {
       method: "tools/call",
       params: { name: "whats_running", arguments: { state: "running" } },
     });
-    const result = response.result as { isError: boolean; content: Array<{ text: string }> };
+    const result = response.result as {
+      isError: boolean;
+      content: Array<{ text: string }>;
+    };
     expect(result.isError).toBe(false);
     const payload = JSON.parse(result.content[0]?.text ?? "{}") as {
       outcome: string;
@@ -112,19 +124,33 @@ describe("handleMcpMessage", () => {
     });
     expect((badTool.result as { isError: boolean }).isError).toBe(true);
 
-    const unknownMethod = await call({ jsonrpc: "2.0", id: 7, method: "resources/list" });
+    const unknownMethod = await call({
+      jsonrpc: "2.0",
+      id: 7,
+      method: "resources/list",
+    });
     expect((unknownMethod.error as { code: number }).code).toBe(-32601);
 
-    const parseError = await call({ jsonrpc: "2.0", id: 8, method: "tools/call" });
+    const parseError = await call({
+      jsonrpc: "2.0",
+      id: 8,
+      method: "tools/call",
+    });
     expect((parseError.result as { isError: boolean }).isError).toBe(true);
 
     const unparsable = await handleMcpMessage("{oops");
     expect(unparsable).not.toBeNull();
-    expect((JSON.parse(unparsable as string).error as { code: number }).code).toBe(-32700);
+    expect(
+      (JSON.parse(unparsable as string).error as { code: number }).code,
+    ).toBe(-32700);
 
     // No batch support: an array is rejected, not silently dropped.
-    const batch = await handleMcpMessage(JSON.stringify([{ jsonrpc: "2.0", id: 9, method: "ping" }]));
-    expect((JSON.parse(batch as string).error as { code: number }).code).toBe(-32600);
+    const batch = await handleMcpMessage(
+      JSON.stringify([{ jsonrpc: "2.0", id: 9, method: "ping" }]),
+    );
+    expect((JSON.parse(batch as string).error as { code: number }).code).toBe(
+      -32600,
+    );
 
     // An explicit "id": null is a request, not a notification.
     const nullId = await handleMcpMessage(
@@ -133,7 +159,9 @@ describe("handleMcpMessage", () => {
     expect(JSON.parse(nullId as string).result).toEqual({});
 
     expect(
-      await handleMcpMessage(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })),
+      await handleMcpMessage(
+        JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      ),
     ).toBeNull();
   });
 });

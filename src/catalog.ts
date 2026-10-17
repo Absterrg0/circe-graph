@@ -18,7 +18,10 @@
  * taught by a real confirmation — also join the candidate's `names`, so the
  * next session resolves them outright with a confirmed-pronunciation match.
  */
-import type { VoiceProjectCandidate } from "./groundVoiceTurn.ts";
+import {
+  locateProjectSlot,
+  type VoiceProjectCandidate,
+} from "./groundVoiceTurn.ts";
 import { runRead, type GraphRow } from "./falkor.ts";
 
 export interface GraphMachine {
@@ -92,10 +95,16 @@ export const normalizeName = (value: string): string =>
  * matching then asks the graph whether any title or alias equals a window.
  */
 export function heardWindows(heard: string): string[] {
-  const words = [...heard.matchAll(/[\p{Letter}\p{Number}]+/gu)].map((match) => normalizeName(match[0]));
+  const words = [...heard.matchAll(/[\p{Letter}\p{Number}]+/gu)].map((match) =>
+    normalizeName(match[0]),
+  );
   const windows = new Set<string>();
   for (let start = 0; start < words.length; start += 1) {
-    for (let length = 1; length <= MAX_WINDOW_WORDS && start + length <= words.length; length += 1) {
+    for (
+      let length = 1;
+      length <= MAX_WINDOW_WORDS && start + length <= words.length;
+      length += 1
+    ) {
       windows.add(words.slice(start, start + length).join(" "));
     }
   }
@@ -124,19 +133,28 @@ ${CATALOG_SELECT}`;
 const FULL_CATALOG_QUERY = `${CATALOG_FROM}
 ${CATALOG_SELECT}`;
 
-const asStrings = (values: ReadonlyArray<string | null> | null | undefined): string[] =>
-  (values ?? []).filter((value): value is string => typeof value === "string" && value.length > 0);
+const asStrings = (
+  values: ReadonlyArray<string | null> | null | undefined,
+): string[] =>
+  (values ?? []).filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
 
-function toCandidate(row: CatalogRow, windows: ReadonlyArray<string>): GraphCandidate {
+function toCandidate(
+  row: CatalogRow,
+  windows: ReadonlyArray<string>,
+): GraphCandidate {
   const title = row.projectTitle;
-  const aliasWindows = asStrings(row.aliasWindows);
+  const aliasWindows = asStrings(row.aliasWindows).map(normalizeName);
   // A confirmed alias is part of how this project is named; a hint is not.
   const confirmedNames = asStrings(row.confirmedNames).filter(
     (name) => normalizeName(name) !== normalizeName(title),
   );
   const titleWindow = windows.find((window) => window === normalizeName(title));
   const aliasWindow =
-    titleWindow === undefined ? windows.find((window) => aliasWindows.includes(window)) : undefined;
+    titleWindow === undefined
+      ? windows.find((window) => aliasWindows.includes(window))
+      : undefined;
   const evidence: CandidateEvidence =
     titleWindow !== undefined
       ? { pass: "exact", kind: "title", matched: titleWindow }
@@ -145,7 +163,9 @@ function toCandidate(row: CatalogRow, windows: ReadonlyArray<string>): GraphCand
             pass: "exact",
             kind: "alias",
             matched: aliasWindow,
-            aliasKind: confirmedNames.some((name) => normalizeName(name) === aliasWindow)
+            aliasKind: confirmedNames.some(
+              (name) => normalizeName(name) === aliasWindow,
+            )
               ? "confirmed"
               : "hint",
           }
@@ -165,7 +185,8 @@ function toCandidate(row: CatalogRow, windows: ReadonlyArray<string>): GraphCand
         id: row.machineId,
         name: row.machineName,
         connected: row.machineConnected !== false,
-        ...(typeof row.machineReason === "string" && row.machineReason.length > 0
+        ...(typeof row.machineReason === "string" &&
+        row.machineReason.length > 0
           ? { reason: row.machineReason }
           : {}),
       },
@@ -177,9 +198,19 @@ function toCandidate(row: CatalogRow, windows: ReadonlyArray<string>): GraphCand
 /**
  * Candidates plus the exact Cypher that produced them, for /why explainability.
  */
-export async function lookupCandidates(heard: string): Promise<CandidateLookup> {
-  const windows = heardWindows(heard);
-  const exactRows = await runRead<CatalogRow>(EXACT_CANDIDATES_QUERY, { windows });
+export async function lookupCandidates(
+  heard: string,
+  mode: "explicit-only" | "explicit-or-inferred" = "explicit-or-inferred",
+): Promise<CandidateLookup> {
+  const source = heard.trim();
+  const slot = locateProjectSlot(source, mode);
+  // Names in task prose cannot narrow the catalog for the project slot.
+  const windows = heardWindows(
+    slot === undefined ? "" : source.slice(slot.start, slot.end),
+  );
+  const exactRows = await runRead<CatalogRow>(EXACT_CANDIDATES_QUERY, {
+    windows,
+  });
   if (exactRows.length > 0) {
     return {
       candidates: exactRows.map((row) => toCandidate(row, windows)),
@@ -197,6 +228,14 @@ export async function lookupCandidates(heard: string): Promise<CandidateLookup> 
     rows: catalogRows,
     pass: "catalog-fallback",
   };
+}
+
+/** Explain the exact span selected by the core, rather than other names in the slot. */
+export function candidatesForMatchedSpan(
+  lookup: CandidateLookup,
+  heard: string,
+): GraphCandidate[] {
+  return lookup.rows.map((row) => toCandidate(row, heardWindows(heard)));
 }
 
 /**

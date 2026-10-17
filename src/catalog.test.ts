@@ -2,13 +2,13 @@
  * Catalog tests run against a live FalkorDB (docker compose up -d) on a
  * separate graph so they never touch the demo data.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { getCandidates, heardWindows, lookupCandidates } from "./catalog.ts";
 import { closeGraph, getGraph, runCypher } from "./falkor.ts";
 import { SEED_IDS, seedGraph } from "./seedGraph.ts";
 
-beforeAll(async () => {
+beforeEach(async () => {
   process.env.CIRCE_GRAPH = "circe_test_catalog";
   await seedGraph(await getGraph());
 });

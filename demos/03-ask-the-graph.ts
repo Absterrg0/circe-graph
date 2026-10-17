@@ -1,7 +1,7 @@
 /**
  * Demo 3: ask the graph — a fixed catalogue, no model-written Cypher.
  *
- * Five reviewed tools with named parameters and arguments validated against
+ * Four read tools with named parameters and arguments validated against
  * the graph. Every answer states its shape (answered with a path, answered
  * from memory, not in the graph, unknown name, ambiguous name) and carries the
  * query it ran. The same catalogue is exposed over MCP, so any agent host can
@@ -90,7 +90,7 @@ if (response !== null) {
   if (typeof text === "string") {
     const payload = JSON.parse(text) as { outcome: string; summary: string };
     console.log(
-      `← { outcome: ${JSON.stringify(payload.outcome)}, summary: ${JSON.stringify(payload.summary)} }  (paths, memory, and Cypher included)`,
+      `← { outcome: ${JSON.stringify(payload.outcome)}, summary: ${JSON.stringify(payload.summary)} }  (paths and Cypher parameters included)`,
     );
   }
 }

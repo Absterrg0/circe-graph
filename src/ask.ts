@@ -19,7 +19,8 @@
  */
 import { runRead, type GraphRow } from "./falkor.ts";
 
-export type AskToolName = "whats_running" | "machine_blast_radius" | "project_history" | "why_heard";
+export type AskToolName =
+  "whats_running" | "machine_blast_radius" | "project_history" | "why_heard";
 
 export type AskOutcome =
   | "answered_with_path"
@@ -36,6 +37,7 @@ export interface AskResultShape {
   readonly rows: ReadonlyArray<GraphRow>;
   readonly paths: ReadonlyArray<string>;
   readonly cypher: string;
+  readonly params: Readonly<Record<string, unknown>>;
 }
 
 /** A catalogue answer, marked untrusted; see the header note. */
@@ -48,10 +50,22 @@ export interface ToolDescriptor {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Readonly<Record<string, unknown>>;
+  readonly annotations: {
+    readonly readOnlyHint: boolean;
+    readonly destructiveHint: boolean;
+    readonly idempotentHint: boolean;
+    readonly openWorldHint: boolean;
+  };
 }
 
 export const ROUTE_TOOL: ToolDescriptor = {
   name: "route_request",
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false,
+  },
   description:
     "Ground one spoken or typed request against the Circe graph: resolve the project slot to the project a machine owns, remember the turn, and return the typed outcome plus the Cypher path that justified the route. Never routes to a disconnected machine without reporting it; never guesses between duplicate project names.",
   inputSchema: {
@@ -68,9 +82,55 @@ export const ROUTE_TOOL: ToolDescriptor = {
   },
 } as const;
 
+export const FOLLOW_UP_TOOLS: ReadonlyArray<ToolDescriptor> = [
+  {
+    name: "confirm_route",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    description:
+      "After the user explicitly confirms an offered project, pass the original utterance and its project id. Records the resolution and learns the pronunciation with provenance. Never call this to guess the user's answer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        utterance: { type: "string" },
+        projectId: { type: "string" },
+      },
+      required: ["utterance", "projectId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "answer_clarification",
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    description:
+      "Answer a needs_clarification route using the user's actual reply, such as laptop or build-box. Pass the original utterance and the reply. Records the chosen project and remembers the precedent; an unmatched answer leaves the question open.",
+    inputSchema: {
+      type: "object",
+      properties: { utterance: { type: "string" }, answer: { type: "string" } },
+      required: ["utterance", "answer"],
+      additionalProperties: false,
+    },
+  },
+];
+
 export const ASK_TOOLS: ReadonlyArray<ToolDescriptor> = [
   {
     name: "whats_running",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     description:
       "Every task in flight, with the machine and project that own it. Multi-hop traversal (Machine)-[:OWNS]->(Project)-[:HAS]->(Task).",
     inputSchema: {
@@ -87,12 +147,21 @@ export const ASK_TOOLS: ReadonlyArray<ToolDescriptor> = [
   },
   {
     name: "machine_blast_radius",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     description:
       "If this machine goes down, what stops? Traverses (Machine)-[:OWNS|HAS*1..depth]-> and reports affected projects and tasks, plus same-named projects on other machines (reported, never moved silently). Depth 1 = projects, depth 2 = projects and tasks.",
     inputSchema: {
       type: "object",
       properties: {
-        machine: { type: "string", description: 'Machine name, e.g. "build-box".' },
+        machine: {
+          type: "string",
+          description: 'Machine name, e.g. "build-box".',
+        },
         depth: {
           type: "integer",
           minimum: 1,
@@ -106,14 +175,31 @@ export const ASK_TOOLS: ReadonlyArray<ToolDescriptor> = [
   },
   {
     name: "project_history",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     description:
       "What the graph already knows about a project: episodes recorded about it, newest first. Answered from memory when episodes exist; says 'not in the graph yet' when the project exists with no episodes. Name the machine when the title exists on several.",
     inputSchema: {
       type: "object",
       properties: {
-        project: { type: "string", description: 'Project title, e.g. "Rivvl".' },
-        machine: { type: "string", description: 'Machine name to disambiguate duplicate titles.' },
-        limit: { type: "integer", minimum: 1, maximum: 20, description: "Max episodes; defaults to 5." },
+        project: {
+          type: "string",
+          description: 'Project title, e.g. "Rivvl".',
+        },
+        machine: {
+          type: "string",
+          description: "Machine name to disambiguate duplicate titles.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 20,
+          description: "Max episodes; defaults to 5.",
+        },
       },
       required: ["project"],
       additionalProperties: false,
@@ -121,8 +207,14 @@ export const ASK_TOOLS: ReadonlyArray<ToolDescriptor> = [
   },
   {
     name: "why_heard",
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     description:
-      'Why a heard word means a project: the learned alias that connects them, its strength (hint or confirmed), and — for confirmed aliases — the utterance that taught it. Falls back to the plain project title, or reports the name as unknown.',
+      "Why a heard word means a project: the learned alias that connects them, its strength (hint or confirmed), and — for confirmed aliases — the utterance that taught it. Falls back to the plain project title, or reports the name as unknown.",
     inputSchema: {
       type: "object",
       properties: {
@@ -136,7 +228,10 @@ export const ASK_TOOLS: ReadonlyArray<ToolDescriptor> = [
 
 const STATE_VALUES = ["running", "queued"] as const;
 
-function requiredString(args: Readonly<Record<string, unknown>>, key: string): string {
+function requiredString(
+  args: Readonly<Record<string, unknown>>,
+  key: string,
+): string {
   const value = args[key];
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`argument "${key}" must be a non-empty string`);
@@ -144,9 +239,12 @@ function requiredString(args: Readonly<Record<string, unknown>>, key: string): s
   return value.trim();
 }
 
-function optionalString(args: Readonly<Record<string, unknown>>, key: string): string | undefined {
+function optionalString(
+  args: Readonly<Record<string, unknown>>,
+  key: string,
+): string | undefined {
   const value = args[key];
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined) return undefined;
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`argument "${key}" must be a non-empty string`);
   }
@@ -161,9 +259,16 @@ function optionalInteger(
   maximum: number,
 ): number {
   const value = args[key];
-  if (value === undefined || value === null) return fallback;
-  if (typeof value !== "number" || !Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new Error(`argument "${key}" must be an integer between ${minimum} and ${maximum}`);
+  if (value === undefined) return fallback;
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < minimum ||
+    value > maximum
+  ) {
+    throw new Error(
+      `argument "${key}" must be an integer between ${minimum} and ${maximum}`,
+    );
   }
   return value;
 }
@@ -174,7 +279,10 @@ const quoted = (value: string): string => JSON.stringify(value);
 function chainLine(parts: {
   readonly machine: string;
   readonly rels: ReadonlyArray<"OWNS" | "HAS" | "LEARNED_ALIAS">;
-  readonly nodes: ReadonlyArray<{ readonly label: "Project" | "Task" | "Alias"; readonly props: string }>;
+  readonly nodes: ReadonlyArray<{
+    readonly label: "Project" | "Task" | "Alias";
+    readonly props: string;
+  }>;
 }): string {
   let line = `(:Machine {name: ${quoted(parts.machine)}})`;
   parts.nodes.forEach((node, index) => {
@@ -191,6 +299,7 @@ interface RunningRow extends GraphRow {
 }
 
 const RUNNING_QUERY = `MATCH (m:Machine)-[:OWNS]->(p:Project)-[:HAS]->(t:Task)
+WHERE t.state IN ['running', 'queued']
 RETURN t.title AS task, t.state AS state, p.title AS project, m.name AS machine
 ORDER BY t.state, m.name, t.title`;
 
@@ -199,26 +308,42 @@ WHERE t.state = $state
 RETURN t.title AS task, t.state AS state, p.title AS project, m.name AS machine
 ORDER BY m.name, t.title`;
 
-async function whatsRunning(args: Readonly<Record<string, unknown>>): Promise<AskResultShape> {
+async function whatsRunning(
+  args: Readonly<Record<string, unknown>>,
+): Promise<AskResultShape> {
   const state = optionalString(args, "state");
-  if (state !== undefined && !STATE_VALUES.includes(state as (typeof STATE_VALUES)[number])) {
-    throw new Error(`argument "state" must be one of: ${STATE_VALUES.join(", ")}`);
+  if (
+    state !== undefined &&
+    !STATE_VALUES.includes(state as (typeof STATE_VALUES)[number])
+  ) {
+    throw new Error(
+      `argument "state" must be one of: ${STATE_VALUES.join(", ")}`,
+    );
   }
   const cypher = state === undefined ? RUNNING_QUERY : RUNNING_QUERY_BY_STATE;
-  const rows = await runRead<RunningRow>(cypher, state === undefined ? {} : { state });
+  const rows = await runRead<RunningRow>(
+    cypher,
+    state === undefined ? {} : { state },
+  );
   const paths = rows.map((row) =>
     chainLine({
       machine: row.machine,
       rels: ["OWNS", "HAS"],
       nodes: [
         { label: "Project", props: `title: ${quoted(row.project)}` },
-        { label: "Task", props: `title: ${quoted(row.task)}, state: ${quoted(row.state)}` },
+        {
+          label: "Task",
+          props: `title: ${quoted(row.task)}, state: ${quoted(row.state)}`,
+        },
       ],
     }),
   );
   const described = rows
     .slice(0, 6)
-    .map((row) => `${quoted(row.task)} (${row.state}, ${row.project} on ${row.machine})`)
+    .map(
+      (row) =>
+        `${quoted(row.task)} (${row.state}, ${row.project} on ${row.machine})`,
+    )
     .join("; ");
   const summary =
     rows.length === 0
@@ -234,6 +359,7 @@ async function whatsRunning(args: Readonly<Record<string, unknown>>): Promise<As
     rows,
     paths,
     cypher,
+    params: state === undefined ? {} : { state },
   };
 }
 
@@ -265,7 +391,9 @@ const MACHINE_RESOLVE_QUERY = `MATCH (m:Machine)
 WHERE toLower(m.name) = toLower($name)
 RETURN m.id AS id, m.name AS name, m.connected AS connected, m.disconnectedReason AS reason`;
 
-const blastQuery = (depth: number): string => `MATCH path = (m:Machine {id: $machineId})-[:OWNS|HAS*1..${depth}]->(x)
+const blastQuery = (
+  depth: number,
+): string => `MATCH path = (m:Machine {id: $machineId})-[:OWNS|HAS*1..${depth}]->(x)
 RETURN 'Task' IN labels(x) AS isTask, coalesce(x.title, x.name) AS title, x.state AS state,
        [n IN nodes(path) | coalesce(n.name, n.title)] AS via,
        [n IN nodes(path) | CASE WHEN 'Task' IN labels(n) THEN 'Task' ELSE 'Project' END] AS nodeLabels,
@@ -280,10 +408,25 @@ RETURN p.title AS project, other.name AS mirrorMachine, other.connected AS mirro
        mirror.workspaceRoot AS mirrorRoot
 ORDER BY project, mirrorMachine`;
 
-async function machineBlastRadius(args: Readonly<Record<string, unknown>>): Promise<AskResultShape> {
+async function machineBlastRadius(
+  args: Readonly<Record<string, unknown>>,
+): Promise<AskResultShape> {
   const machineName = requiredString(args, "machine");
   const depth = optionalInteger(args, "depth", 2, 1, 2);
-  const resolved = await runRead<MachineRow>(MACHINE_RESOLVE_QUERY, { name: machineName });
+  const resolved = await runRead<MachineRow>(MACHINE_RESOLVE_QUERY, {
+    name: machineName,
+  });
+  if (resolved.length > 1)
+    return {
+      tool: "machine_blast_radius",
+      args: { machine: machineName, depth },
+      outcome: "ambiguous_name",
+      summary: `Several machines are named ${quoted(machineName)}; the graph will not guess.`,
+      rows: resolved,
+      paths: [],
+      cypher: MACHINE_RESOLVE_QUERY,
+      params: { name: machineName },
+    };
   const machine = resolved[0];
   if (machine === undefined) {
     return {
@@ -294,6 +437,7 @@ async function machineBlastRadius(args: Readonly<Record<string, unknown>>): Prom
       rows: [],
       paths: [],
       cypher: MACHINE_RESOLVE_QUERY,
+      params: { name: machineName },
     };
   }
   const cypher = blastQuery(depth);
@@ -303,7 +447,9 @@ async function machineBlastRadius(args: Readonly<Record<string, unknown>>): Prom
   ]);
   const projects = rows.filter((row) => !row.isTask);
   const tasks = rows.filter((row) => row.isTask);
-  const mirrors = mirrorRows.filter((row) => typeof row.mirrorMachine === "string");
+  const mirrors = mirrorRows.filter(
+    (row) => typeof row.mirrorMachine === "string",
+  );
   const paths: string[] = rows.map((row) => {
     // Walk the actual nodes and relationship types the query returned: the
     // traversal is `[:OWNS|HAS*1..depth]`, so parity-based guessing would
@@ -327,7 +473,9 @@ async function machineBlastRadius(args: Readonly<Record<string, unknown>>): Prom
       `${chainLine({
         machine: mirror.mirrorMachine as string,
         rels: ["OWNS"],
-        nodes: [{ label: "Project", props: `title: ${quoted(mirror.project)}` }],
+        nodes: [
+          { label: "Project", props: `title: ${quoted(mirror.project)}` },
+        ],
       })}   [mirror of ${quoted(machine.name)}'s copy — connected: ${mirror.mirrorConnected === true}]`,
     );
   }
@@ -346,19 +494,26 @@ async function machineBlastRadius(args: Readonly<Record<string, unknown>>): Prom
       args: { machine: machine.name, depth },
       outcome: "not_in_graph",
       summary: `Machine ${quoted(machine.name)} exists but owns no projects in the graph — nothing to compute a blast radius over.${
-        mirrorSentence === "No same-named project exists on another machine." ? "" : ` ${mirrorSentence}`
+        mirrorSentence === "No same-named project exists on another machine."
+          ? ""
+          : ` ${mirrorSentence}`
       }`,
       rows: [],
       paths,
       cypher,
+      params: { machineId: machine.id },
     };
   }
   const taskSentence =
-    tasks.length === 0
-      ? "no tasks are attached"
-      : tasks
-          .map((row) => `${quoted(row.title)} (${row.state ?? "unknown state"})`)
-          .join(", ");
+    depth === 1
+      ? "tasks are outside this traversal; use depth 2 to include them"
+      : tasks.length === 0
+        ? "no tasks are attached"
+        : tasks
+            .map(
+              (row) => `${quoted(row.title)} (${row.state ?? "unknown state"})`,
+            )
+            .join(", ");
   return {
     tool: "machine_blast_radius",
     args: { machine: machine.name, depth },
@@ -369,6 +524,7 @@ async function machineBlastRadius(args: Readonly<Record<string, unknown>>): Prom
     rows,
     paths,
     cypher,
+    params: { machineId: machine.id },
   };
 }
 
@@ -397,15 +553,23 @@ RETURN e.text AS text, e.ts AS ts, e.status AS status
 ORDER BY e.ts DESC
 LIMIT $limit`;
 
-async function projectHistory(args: Readonly<Record<string, unknown>>): Promise<AskResultShape> {
+async function projectHistory(
+  args: Readonly<Record<string, unknown>>,
+): Promise<AskResultShape> {
   const project = requiredString(args, "project");
   const machine = optionalString(args, "machine");
   const limit = optionalInteger(args, "limit", 5, 1, 20);
-  const resolved = await runRead<ProjectRow>(PROJECT_RESOLVE_QUERY, { project });
+  const resolved = await runRead<ProjectRow>(PROJECT_RESOLVE_QUERY, {
+    project,
+  });
   const onMachine =
     machine === undefined
       ? resolved
-      : resolved.filter((row) => row.machine.toLocaleLowerCase("en-US") === machine.toLocaleLowerCase("en-US"));
+      : resolved.filter(
+          (row) =>
+            row.machine.toLocaleLowerCase("en-US") ===
+            machine.toLocaleLowerCase("en-US"),
+        );
   if (onMachine.length === 0) {
     return {
       tool: "project_history",
@@ -418,6 +582,7 @@ async function projectHistory(args: Readonly<Record<string, unknown>>): Promise<
       rows: [],
       paths: [],
       cypher: PROJECT_RESOLVE_QUERY,
+      params: { project },
     };
   }
   if (onMachine.length > 1) {
@@ -431,10 +596,14 @@ async function projectHistory(args: Readonly<Record<string, unknown>>): Promise<
       rows: onMachine,
       paths: [],
       cypher: PROJECT_RESOLVE_QUERY,
+      params: { project },
     };
   }
   const target = onMachine[0] as ProjectRow;
-  const rows = await runRead<HistoryRow>(PROJECT_HISTORY_QUERY, { projectId: target.id, limit });
+  const rows = await runRead<HistoryRow>(PROJECT_HISTORY_QUERY, {
+    projectId: target.id,
+    limit,
+  });
   const paths = rows.map(
     (row) =>
       `(:Episode:Memory {ts: ${quoted(row.ts)}${typeof row.status === "string" ? `, status: ${quoted(row.status)}` : ""}})-[:ABOUT]->(:Project {title: ${quoted(target.title)}})   [${quoted(row.text)}]`,
@@ -448,6 +617,7 @@ async function projectHistory(args: Readonly<Record<string, unknown>>): Promise<
       rows: [],
       paths: [],
       cypher: PROJECT_HISTORY_QUERY,
+      params: { projectId: target.id, limit },
     };
   }
   const newest = rows[0] as HistoryRow;
@@ -459,10 +629,12 @@ async function projectHistory(args: Readonly<Record<string, unknown>>): Promise<
     rows,
     paths,
     cypher: PROJECT_HISTORY_QUERY,
+    params: { projectId: target.id, limit },
   };
 }
 
 interface AliasRow extends GraphRow {
+  readonly projectId: string;
   readonly project: string;
   readonly machine?: string | null;
   readonly alias: string;
@@ -474,6 +646,7 @@ interface AliasRow extends GraphRow {
 }
 
 interface TitleRow extends GraphRow {
+  readonly projectId: string;
   readonly project: string;
   readonly machine: string;
 }
@@ -482,16 +655,18 @@ const WHY_ALIAS_QUERY = `MATCH (p:Project)-[l:LEARNED_ALIAS]->(a:Alias)
 WHERE toLower(a.text) = toLower($text)
 OPTIONAL MATCH (m:Machine)-[:OWNS]->(p)
 OPTIONAL MATCH (u:Utterance)-[:TAUGHT]->(a)
-RETURN p.title AS project, m.name AS machine, a.text AS alias, a.kind AS kind,
+RETURN p.id AS projectId, p.title AS project, m.name AS machine, a.text AS alias, a.kind AS kind,
        l.source AS source, l.ts AS learnedAt, u.text AS taughtText, u.ts AS taughtAt
 ORDER BY learnedAt DESC`;
 
 const WHY_TITLE_QUERY = `MATCH (m:Machine)-[:OWNS]->(p:Project)
 WHERE toLower(p.title) = toLower($text)
-RETURN p.title AS project, m.name AS machine
+RETURN p.id AS projectId, p.title AS project, m.name AS machine
 ORDER BY machine`;
 
-async function whyHeard(args: Readonly<Record<string, unknown>>): Promise<AskResultShape> {
+async function whyHeard(
+  args: Readonly<Record<string, unknown>>,
+): Promise<AskResultShape> {
   const text = requiredString(args, "text");
   const aliasRows = await runRead<AliasRow>(WHY_ALIAS_QUERY, { text });
   if (aliasRows.length > 0) {
@@ -508,7 +683,14 @@ async function whyHeard(args: Readonly<Record<string, unknown>>): Promise<AskRes
     }
     // One heard word can only mean one project; if several own the same text,
     // say so instead of narrating whichever came first.
-    const owners = [...new Set(aliasRows.map((row) => row.project))];
+    const owners = [
+      ...new Map(
+        aliasRows.map((row) => [
+          row.projectId,
+          `${row.project} on ${row.machine ?? "unknown machine"}`,
+        ]),
+      ).values(),
+    ];
     if (owners.length > 1) {
       return {
         tool: "why_heard",
@@ -518,6 +700,7 @@ async function whyHeard(args: Readonly<Record<string, unknown>>): Promise<AskRes
         rows: aliasRows,
         paths,
         cypher: WHY_ALIAS_QUERY,
+        params: { text },
       };
     }
     const first = aliasRows[0] as AliasRow;
@@ -537,6 +720,7 @@ async function whyHeard(args: Readonly<Record<string, unknown>>): Promise<AskRes
       rows: aliasRows,
       paths,
       cypher: WHY_ALIAS_QUERY,
+      params: { text },
     };
   }
   const titleRows = await runRead<TitleRow>(WHY_TITLE_QUERY, { text });
@@ -544,20 +728,23 @@ async function whyHeard(args: Readonly<Record<string, unknown>>): Promise<AskRes
     return {
       tool: "why_heard",
       args: { text },
-      outcome: "answered_with_path",
-      summary: `${quoted(text)} is a project's plain title (${titleRows
-        .map((row) => row.machine)
-        .join(", ")}) — no alias needed.`,
+      outcome: titleRows.length > 1 ? "ambiguous_name" : "answered_with_path",
+      summary:
+        titleRows.length > 1
+          ? `${quoted(text)} names several projects (${titleRows.map((row) => row.machine).join(", ")}); the graph will not guess.`
+          : `${quoted(text)} is a project's plain title (${titleRows
+              .map((row) => row.machine)
+              .join(", ")}) — no alias needed.`,
       rows: titleRows,
-      paths: titleRows.map(
-        (row) =>
-          chainLine({
-            machine: row.machine,
-            rels: ["OWNS"],
-            nodes: [{ label: "Project", props: `title: ${quoted(row.project)}` }],
-          }),
+      paths: titleRows.map((row) =>
+        chainLine({
+          machine: row.machine,
+          rels: ["OWNS"],
+          nodes: [{ label: "Project", props: `title: ${quoted(row.project)}` }],
+        }),
       ),
       cypher: WHY_TITLE_QUERY,
+      params: { text },
     };
   }
   return {
@@ -568,6 +755,7 @@ async function whyHeard(args: Readonly<Record<string, unknown>>): Promise<AskRes
     rows: [],
     paths: [],
     cypher: WHY_ALIAS_QUERY,
+    params: { text },
   };
 }
 

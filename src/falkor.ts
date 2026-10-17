@@ -3,6 +3,7 @@
  * seed script, the demo, and tests. Nothing in this repo keeps a second copy
  * of the catalog: callers always query the graph.
  */
+import "./env.ts";
 import { FalkorDB, type Graph } from "falkordb";
 
 export type GraphRow = Record<string, unknown>;
@@ -21,51 +22,68 @@ const DEFAULT_GRAPH = "circe";
 
 /** Graph name is environment-driven so tests can run without touching dev data. */
 export function graphName(): string {
-  if (process.env.CIRCE_GRAPH !== undefined && process.env.CIRCE_GRAPH.length > 0) {
+  if (
+    process.env.CIRCE_GRAPH !== undefined &&
+    process.env.CIRCE_GRAPH.length > 0
+  ) {
     return process.env.CIRCE_GRAPH;
   }
   // Tenant isolation comes free: FalkorDB holds many graphs in one instance,
   // so a tenant is a graph rather than a WHERE clause anyone can forget.
   const tenant = process.env.CIRCE_TENANT;
-  return tenant === undefined || tenant.length === 0 ? DEFAULT_GRAPH : `${DEFAULT_GRAPH}:${tenant}`;
+  return tenant === undefined || tenant.length === 0
+    ? DEFAULT_GRAPH
+    : `${DEFAULT_GRAPH}:${tenant}`;
 }
 
-let client: FalkorDB | undefined;
-let graph: Graph | undefined;
+interface GraphConnection {
+  client: Promise<FalkorDB>;
+  readonly graphs: Map<string, Graph>;
+}
 
-async function connectClient(): Promise<FalkorDB> {
-  if (client === undefined) {
-    // FALKOR_URL (e.g. a FalkorDB Cloud rediss:// URL) wins when present;
-    // otherwise host/port, with FALKOR_TLS=1 to wrap the socket in TLS.
+let connection: GraphConnection | undefined;
+
+function connectClient(): GraphConnection {
+  if (connection === undefined) {
     const url = process.env.FALKOR_URL;
-    client =
+    const pending = FalkorDB.connect(
       url !== undefined && url.length > 0
-        ? await FalkorDB.connect({ url })
-        : await FalkorDB.connect({
+        ? { url }
+        : {
             socket: {
               host: process.env.FALKOR_HOST ?? "localhost",
               port: Number(process.env.FALKOR_PORT ?? 6379),
               ...(process.env.FALKOR_TLS === "1" ? { tls: true } : {}),
             },
-          });
+          },
+    );
+    const next: GraphConnection = { client: pending, graphs: new Map() };
+    next.client = pending.catch((error: unknown) => {
+      if (connection === next) connection = undefined;
+      throw error;
+    });
+    connection = next;
   }
-  return client;
+  return connection;
 }
 
 export async function getGraph(): Promise<Graph> {
-  if (graph === undefined) {
-    const connected = await connectClient();
-    graph = connected.selectGraph(graphName());
+  const name = graphName();
+  const state = connectClient();
+  const connected = await state.client;
+  let selected = state.graphs.get(name);
+  if (selected === undefined) {
+    selected = connected.selectGraph(name);
+    state.graphs.set(name, selected);
   }
-  return graph;
+  return selected;
 }
 
-/** Close the socket so scripts exit cleanly; tests call this in afterAll. */
+/** Await even an in-flight connection; old graph handles stay with that client. */
 export async function closeGraph(): Promise<void> {
-  graph = undefined;
-  const connected = client;
-  client = undefined;
-  if (connected !== undefined) await connected.close();
+  const state = connection;
+  connection = undefined;
+  if (state !== undefined) await (await state.client).close();
 }
 
 /**
@@ -128,6 +146,8 @@ export async function countNodes(label: string): Promise<number> {
   if (!LABEL_PATTERN.test(label)) {
     throw new Error(`countNodes: invalid label ${JSON.stringify(label)}`);
   }
-  const rows = await runRead<{ total: number }>(`MATCH (n:${label}) RETURN count(n) AS total`);
+  const rows = await runRead<{ total: number }>(
+    `MATCH (n:${label}) RETURN count(n) AS total`,
+  );
   return Number(rows[0]?.total ?? 0);
 }

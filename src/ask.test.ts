@@ -2,13 +2,13 @@
  * Ask-tool tests run against a live FalkorDB (docker compose up -d) on a
  * separate graph so they never touch the demo data.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { askGraph, ASK_TOOLS, ROUTE_TOOL } from "./ask.ts";
+import { askGraph, ASK_TOOLS, ROUTE_TOOL, FOLLOW_UP_TOOLS } from "./ask.ts";
 import { closeGraph, getGraph, runCypher } from "./falkor.ts";
 import { SEED_IDS, seedGraph } from "./seedGraph.ts";
 
-beforeAll(async () => {
+beforeEach(async () => {
   process.env.CIRCE_GRAPH = "circe_test_ask";
   await seedGraph(await getGraph());
 });
@@ -34,35 +34,61 @@ describe("askGraph", () => {
   });
 
   it("machine_blast_radius changes scope with depth and reports mirrors without moving them", async () => {
-    const depthOne = await askGraph("machine_blast_radius", { machine: "build-box", depth: 1 });
+    const depthOne = await askGraph("machine_blast_radius", {
+      machine: "build-box",
+      depth: 1,
+    });
     expect(depthOne.outcome).toBe("answered_with_path");
     expect(depthOne.rows).toHaveLength(1);
     expect(depthOne.summary).toContain("Portfolio also lives on laptop");
 
-    const depthTwo = await askGraph("machine_blast_radius", { machine: "build-box", depth: 2 });
+    const depthTwo = await askGraph("machine_blast_radius", {
+      machine: "build-box",
+      depth: 2,
+    });
     expect(depthTwo.rows).toHaveLength(2);
-    expect(depthTwo.paths.some((path) => path.includes("refresh the portfolio theme"))).toBe(true);
-    expect(depthTwo.paths.some((path) => path.includes("[mirror of"))).toBe(true);
+    expect(
+      depthTwo.paths.some((path) =>
+        path.includes("refresh the portfolio theme"),
+      ),
+    ).toBe(true);
+    expect(depthTwo.paths.some((path) => path.includes("[mirror of"))).toBe(
+      true,
+    );
 
-    const desktop = await askGraph("machine_blast_radius", { machine: "desktop" });
+    const desktop = await askGraph("machine_blast_radius", {
+      machine: "desktop",
+    });
     expect(desktop.summary).toContain("Rivvl");
-    expect(desktop.summary).toContain("No same-named project exists on another machine.");
+    expect(desktop.summary).toContain(
+      "No same-named project exists on another machine.",
+    );
 
-    const unknown = await askGraph("machine_blast_radius", { machine: "yosemite" });
+    const unknown = await askGraph("machine_blast_radius", {
+      machine: "yosemite",
+    });
     expect(unknown.outcome).toBe("unknown_name");
   });
 
   it("project_history answers from memory, refuses duplicate guesses, and admits an empty memory", async () => {
-    const memory = await askGraph("project_history", { project: "Portfolio", machine: "laptop" });
+    const memory = await askGraph("project_history", {
+      project: "Portfolio",
+      machine: "laptop",
+    });
     expect(memory.outcome).toBe("answered_from_memory");
     expect(memory.rows).toHaveLength(1);
     expect(memory.paths[0]).toContain("reviewed the portfolio homepage copy");
 
-    const ambiguous = await askGraph("project_history", { project: "Portfolio" });
+    const ambiguous = await askGraph("project_history", {
+      project: "Portfolio",
+    });
     expect(ambiguous.outcome).toBe("ambiguous_name");
     expect(ambiguous.summary).toContain("will not guess");
 
-    const empty = await askGraph("project_history", { project: "Portfolio", machine: "build-box" });
+    const empty = await askGraph("project_history", {
+      project: "Portfolio",
+      machine: "build-box",
+    });
     expect(empty.outcome).toBe("not_in_graph");
   });
 
@@ -104,16 +130,37 @@ describe("askGraph", () => {
   });
 
   it("validates arguments and refuses unknown tools", async () => {
-    await expect(askGraph("whats_running", { state: "paused" })).rejects.toThrow(/state/);
-    await expect(askGraph("machine_blast_radius", {})).rejects.toThrow(/machine/);
-    await expect(askGraph("machine_blast_radius", { machine: "desktop", depth: 9 })).rejects.toThrow(
-      /depth/,
+    await expect(
+      askGraph("whats_running", { state: "paused" }),
+    ).rejects.toThrow(/state/);
+    await expect(askGraph("machine_blast_radius", {})).rejects.toThrow(
+      /machine/,
     );
-    await expect(askGraph("drop_everything")).rejects.toThrow(/catalogue is fixed/);
+    await expect(
+      askGraph("machine_blast_radius", { machine: "desktop", depth: 9 }),
+    ).rejects.toThrow(/depth/);
+    await expect(askGraph("drop_everything")).rejects.toThrow(
+      /catalogue is fixed/,
+    );
   });
 });
 
 describe("tool catalogue", () => {
+  it("declares the actual read and additive-write behavior to MCP hosts", () => {
+    for (const tool of ASK_TOOLS)
+      expect(tool.annotations).toMatchObject({
+        readOnlyHint: true,
+        idempotentHint: true,
+        destructiveHint: false,
+      });
+    for (const tool of [ROUTE_TOOL, ...FOLLOW_UP_TOOLS])
+      expect(tool.annotations).toMatchObject({
+        readOnlyHint: false,
+        idempotentHint: false,
+        destructiveHint: false,
+      });
+  });
+
   it("is fixed, described, and schema-shaped for MCP", () => {
     expect(ROUTE_TOOL.name).toBe("route_request");
     expect(ASK_TOOLS.map(({ name }) => name)).toEqual([

@@ -6,3 +6,6 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Optional live-model runs and local recording server output
+.agent-demo*/
